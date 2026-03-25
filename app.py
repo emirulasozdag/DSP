@@ -1,8 +1,8 @@
-import os
-import io
-import csv
-import base64
-import uuid
+"""
+FaceTransform DSP - Facial Image Warping, Aging & Expression Transformation
+CENG 384 - DSP Project
+"""
+import os, io, csv, base64, uuid
 import numpy as np
 import cv2
 import mediapipe as mp
@@ -10,646 +10,312 @@ from mediapipe.tasks.python import BaseOptions
 from mediapipe.tasks.python.vision import FaceLandmarker, FaceLandmarkerOptions, RunningMode
 from flask import Flask, render_template, request, jsonify, send_file
 from scipy.fft import fft2, ifft2, fftshift
-from skimage.metrics import structural_similarity as ssim
-from PIL import Image
+from skimage.metrics import structural_similarity as compare_ssim
 
 app = Flask(__name__)
-app.config['MAX_CONTENT_LENGTH'] = 16 * 1024 * 1024  # 16MB max
+app.config['MAX_CONTENT_LENGTH'] = 16 * 1024 * 1024
 
-UPLOAD_FOLDER = os.path.join(os.path.dirname(__file__), 'uploads')
-RESULTS_FOLDER = os.path.join(os.path.dirname(__file__), 'results')
-os.makedirs(UPLOAD_FOLDER, exist_ok=True)
-os.makedirs(RESULTS_FOLDER, exist_ok=True)
+BASE = os.path.dirname(os.path.abspath(__file__))
+os.makedirs(os.path.join(BASE, 'uploads'), exist_ok=True)
+os.makedirs(os.path.join(BASE, 'results'), exist_ok=True)
 
-ALLOWED_EXTENSIONS = {'png', 'jpg', 'jpeg'}
-STANDARD_SIZE = (512, 512)
+MODEL_PATH = os.path.join(BASE, 'face_landmarker.task')
+STD_SIZE = (512, 512)
 
-MODEL_PATH = os.path.join(os.path.dirname(__file__), 'face_landmarker.task')
+# ─── Helpers ───
+def enc(img):
+    ok, buf = cv2.imencode('.png', img)
+    return base64.b64encode(buf).decode() if ok else ''
 
+def dec(b64):
+    if ',' in b64: b64 = b64.split(',',1)[1]
+    return cv2.imdecode(np.frombuffer(base64.b64decode(b64), np.uint8), cv2.IMREAD_COLOR)
 
-def allowed_file(filename):
-    ext = filename.rsplit('.', 1)[1].lower() if '.' in filename else ''
-    return ext in ALLOWED_EXTENSIONS
+# ─── FR-3.1 Preprocessing ───
+def preprocess(img):
+    if img is None: return None, 'Bad image'
+    h, w = img.shape[:2]
+    if h < 50 or w < 50: return None, 'Too small'
+    gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+    cas = cv2.CascadeClassifier(cv2.data.haarcascades + 'haarcascade_frontalface_default.xml')
+    faces = cas.detectMultiScale(gray, 1.1, 5, minSize=(30,30))
+    if len(faces) > 0:
+        x,y,fw,fh = faces[0]
+        pad = int(max(fw,fh)*0.4)
+        x1,y1 = max(0,x-pad), max(0,y-pad)
+        x2,y2 = min(w,x+fw+pad), min(h,y+fh+pad)
+        img = img[y1:y2, x1:x2]
+    return cv2.resize(img, STD_SIZE, interpolation=cv2.INTER_AREA), None
 
-
-def encode_image(img):
-    _, buffer = cv2.imencode('.png', img)
-    return base64.b64encode(buffer).decode('utf-8')
-
-
-def decode_image(data_uri):
-    if ',' in data_uri:
-        data_uri = data_uri.split(',')[1]
-    img_bytes = base64.b64decode(data_uri)
-    nparr = np.frombuffer(img_bytes, np.uint8)
-    return cv2.imdecode(nparr, cv2.IMREAD_COLOR)
-
-
-# ─── FR-3.1: Image Input & Preprocessing ───
-
-def validate_and_preprocess(image):
-    """FR-3.1.2 to FR-3.1.7: Validate, detect face, crop, normalize, resize."""
-    if image is None:
-        return None, None, "Invalid image data"
-
-    h, w = image.shape[:2]
-    if h < 50 or w < 50:
-        return None, None, "Image resolution too low"
-
-    # FR-3.1.4: Detect facial region
-    face_cascade = cv2.CascadeClassifier(cv2.data.haarcascades + 'haarcascade_frontalface_default.xml')
-    gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
-    faces = face_cascade.detectMultiScale(gray, 1.1, 5, minSize=(30, 30))
-
-    if len(faces) == 0:
-        # Use full image if no face detected
-        face_region = image.copy()
-        face_box = (0, 0, w, h)
-    else:
-        x, y, fw, fh = faces[0]
-        # Add padding
-        pad = int(max(fw, fh) * 0.3)
-        x1 = max(0, x - pad)
-        y1 = max(0, y - pad)
-        x2 = min(w, x + fw + pad)
-        y2 = min(h, y + fh + pad)
-        face_region = image[y1:y2, x1:x2]
-        face_box = (x1, y1, x2 - x1, y2 - y1)
-
-    # FR-3.1.5 & FR-3.1.7: Normalize and resize
-    resized = cv2.resize(face_region, STANDARD_SIZE, interpolation=cv2.INTER_AREA)
-
-    return resized, face_box, None
-
-
-# ─── FR-3.2: Facial Landmark Detection ───
-
-def detect_landmarks(image):
-    """FR-3.2.1 to FR-3.2.3: Detect and return 478 facial landmarks using MediaPipe Tasks API."""
-    rgb = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
-    h, w = image.shape[:2]
-    landmarks = []
-
-    options = FaceLandmarkerOptions(
+# ─── FR-3.2 Landmark Detection ───
+def detect_landmarks(img):
+    h, w = img.shape[:2]
+    rgb = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
+    opts = FaceLandmarkerOptions(
         base_options=BaseOptions(model_asset_path=MODEL_PATH),
-        running_mode=RunningMode.IMAGE,
-        num_faces=1,
-        min_face_detection_confidence=0.5,
-        min_face_presence_confidence=0.5,
-        output_face_blendshapes=False,
-        output_facial_transformation_matrixes=False
-    )
+        running_mode=RunningMode.IMAGE, num_faces=1,
+        min_face_detection_confidence=0.5, min_face_presence_confidence=0.5)
+    pts = []
+    with FaceLandmarker.create_from_options(opts) as det:
+        res = det.detect(mp.Image(image_format=mp.ImageFormat.SRGB, data=rgb))
+        if res.face_landmarks:
+            for lm in res.face_landmarks[0]:
+                pts.append([int(lm.x*w), int(lm.y*h)])
+    return pts
 
-    with FaceLandmarker.create_from_options(options) as landmarker:
-        mp_image = mp.Image(image_format=mp.ImageFormat.SRGB, data=rgb)
-        result = landmarker.detect(mp_image)
+def draw_lm(img, pts):
+    out = img.copy()
+    for p in pts: cv2.circle(out, tuple(p), 1, (0,255,0), -1)
+    return out
 
-        if result.face_landmarks:
-            for lm in result.face_landmarks[0]:
-                landmarks.append({
-                    'x': int(lm.x * w),
-                    'y': int(lm.y * h),
-                    'nx': lm.x,
-                    'ny': lm.y
-                })
+# ─── FR-3.3 Expression Warping ───
+MOUTH_CORNERS = [61, 291]
+MOUTH_TOP = [13]; MOUTH_BOTTOM = [14]
+UPPER_LIP = [61,185,40,39,37,0,267,269,270,409,291]
+LOWER_LIP = [61,146,91,181,84,17,314,405,321,375,291]
+LEFT_BROW = [70,63,105,66,107,55,65,52,53,46]
+RIGHT_BROW = [300,293,334,296,336,285,295,282,283,276]
+JAW = [10,338,297,332,284,251,389,356,454,323,361,288,397,365,379,378,
+       400,377,152,148,176,149,150,136,172,58,132,93,234,127,162,21,54,103,67,109]
 
-    return landmarks
+def _warp_tri(src_img, dst_img, ts, td):
+    rs = cv2.boundingRect(np.float32([ts]))
+    rd = cv2.boundingRect(np.float32([td]))
+    tsr = [(ts[i][0]-rs[0], ts[i][1]-rs[1]) for i in range(3)]
+    tdr = [(td[i][0]-rd[0], td[i][1]-rd[1]) for i in range(3)]
+    crop = src_img[rs[1]:rs[1]+rs[3], rs[0]:rs[0]+rs[2]]
+    if crop.size==0 or rd[2]<=0 or rd[3]<=0: return
+    M = cv2.getAffineTransform(np.float32(tsr), np.float32(tdr))
+    warped = cv2.warpAffine(crop, M, (rd[2],rd[3]), flags=cv2.INTER_LINEAR, borderMode=cv2.BORDER_REFLECT_101)
+    mask = np.zeros((rd[3],rd[2],3), np.float32)
+    cv2.fillConvexPoly(mask, np.int32(tdr), (1,1,1), cv2.LINE_AA)
+    h_i,w_i = dst_img.shape[:2]
+    y1,y2,x1,x2 = rd[1], rd[1]+rd[3], rd[0], rd[0]+rd[2]
+    if y2>h_i or x2>w_i or y1<0 or x1<0: return
+    reg = dst_img[y1:y2, x1:x2].astype(np.float32)
+    dst_img[y1:y2, x1:x2] = (reg*(1-mask) + warped.astype(np.float32)*mask).astype(np.uint8)
 
+def warp_face(img, src, dst):
+    h, w = img.shape[:2]
+    out = img.copy()
+    bnd = [(0,0),(w//2,0),(w-1,0),(0,h//2),(w-1,h//2),(0,h-1),(w//2,h-1),(w-1,h-1)]
+    a_s = list(src) + bnd
+    a_d = list(dst) + bnd
+    sub = cv2.Subdiv2D((0,0,w,h))
+    idx_map = {}
+    for i,p in enumerate(a_d):
+        px = (max(0,min(w-1,int(p[0]))), max(0,min(h-1,int(p[1]))))
+        idx_map[px] = i
+        sub.insert((float(px[0]), float(px[1])))
+    for tri in sub.getTriangleList():
+        ps = [(int(tri[j*2]),int(tri[j*2+1])) for j in range(3)]
+        if not all(0<=p[0]<w and 0<=p[1]<h for p in ps): continue
+        idx = []
+        for p in ps:
+            if p in idx_map: idx.append(idx_map[p])
+            else:
+                best = min(range(len(a_d)), key=lambda j:(a_d[j][0]-p[0])**2+(a_d[j][1]-p[1])**2)
+                idx.append(best)
+        if len(set(idx))<3: continue
+        try: _warp_tri(img, out, [a_s[i] for i in idx], [a_d[i] for i in idx])
+        except: continue
+    return out
 
-def draw_landmarks(image, landmarks, indices=None):
-    """Draw landmark points on image."""
-    img = image.copy()
-    for i, lm in enumerate(landmarks):
-        if indices is None or i in indices:
-            cv2.circle(img, (lm['x'], lm['y']), 1, (0, 255, 0), -1)
-    return img
+def apply_expression(img, lm, etype, intensity):
+    if not lm or len(lm)<300: return img
+    h, w = img.shape[:2]
+    f = intensity / 100.0
+    sp, dp = [], []
+    if etype == 'smile':
+        idxs = list(set(MOUTH_CORNERS+MOUTH_TOP+MOUTH_BOTTOM+UPPER_LIP+LOWER_LIP))
+        for i in idxs:
+            if i>=len(lm): continue
+            sx,sy = lm[i]
+            sp.append((sx,sy))
+            cx = w//2
+            if i in MOUTH_CORNERS:
+                dx = 1 if sx>cx else -1
+                dp.append((sx+int(dx*6*f), sy-int(10*f)))
+            elif i in MOUTH_TOP:
+                dp.append((sx, sy-int(3*f)))
+            elif i in MOUTH_BOTTOM:
+                dp.append((sx, sy+int(3*f)))
+            else:
+                dx = 1 if sx>cx else -1
+                dp.append((sx+int(dx*2*f), sy-int(2*f)))
+    elif etype == 'eyebrow':
+        for i in LEFT_BROW+RIGHT_BROW:
+            if i>=len(lm): continue
+            sx,sy = lm[i]
+            sp.append((sx,sy)); dp.append((sx, sy-int(12*f)))
+    elif etype == 'lips':
+        for i in list(set(UPPER_LIP+LOWER_LIP)):
+            if i>=len(lm): continue
+            sx,sy = lm[i]
+            cx = w//2
+            dx = 1 if sx>cx else -1
+            sp.append((sx,sy)); dp.append((sx+int(dx*8*f), sy))
+    elif etype == 'slim':
+        for i in JAW:
+            if i>=len(lm): continue
+            sx,sy = lm[i]
+            cx = w//2
+            dx = -1 if sx>cx else 1
+            off = int(abs(sx-cx)*0.1*f)
+            sp.append((sx,sy)); dp.append((sx+dx*off, sy))
+    if len(sp)<4: return img
+    result = warp_face(img, sp, dp)
+    # Smooth blend
+    mask = np.zeros(img.shape[:2], np.uint8)
+    cv2.fillConvexPoly(mask, cv2.convexHull(np.array(dp, np.int32)), 255)
+    mask = cv2.GaussianBlur(mask, (31,31), 15)
+    m3 = cv2.merge([mask]*3).astype(np.float32)/255
+    return np.clip(img.astype(np.float32)*(1-m3)+result.astype(np.float32)*m3, 0, 255).astype(np.uint8)
 
-
-# ─── MediaPipe landmark index groups ───
-
-LANDMARK_GROUPS = {
-    'mouth': [61, 146, 91, 181, 84, 17, 314, 405, 321, 375, 291, 308, 324, 318, 402, 317, 14, 87, 178, 88, 95, 78, 61],
-    'left_eyebrow': [70, 63, 105, 66, 107, 55, 65, 52, 53, 46],
-    'right_eyebrow': [300, 293, 334, 296, 336, 285, 295, 282, 283, 276],
-    'lips_outer': [61, 146, 91, 181, 84, 17, 314, 405, 321, 375, 291, 308, 324, 318, 402, 317, 14, 87, 178, 88, 95, 78],
-    'lips_inner': [78, 95, 88, 178, 87, 14, 317, 402, 318, 324, 308, 291, 375, 321, 405, 314, 17, 84, 181, 91, 146, 61],
-    'jaw': [10, 338, 297, 332, 284, 251, 389, 356, 454, 323, 361, 288, 397, 365, 379, 378, 400, 377, 152, 148, 176, 149, 150, 136, 172, 58, 132, 93, 234, 127, 162, 21, 54, 103, 67, 109],
-    'left_cheek': [234, 93, 132, 58, 172, 136, 150, 149, 176, 148, 152],
-    'right_cheek': [454, 323, 361, 288, 397, 365, 379, 378, 400, 377, 152],
-    'mouth_corners': [61, 291],
-    'mouth_top': [13, 14],
-    'mouth_bottom': [17],
-}
-
-
-# ─── FR-3.3: Expression Manipulation ───
-
-def apply_expression_warp(image, landmarks, transform_type, intensity):
-    """
-    FR-3.3.1 to FR-3.3.9: Apply geometric warping for expression manipulation.
-    Uses moving least squares deformation.
-    """
-    if not landmarks:
-        return image
-
-    h, w = image.shape[:2]
-    src_points = []
-    dst_points = []
-
-    intensity_factor = intensity / 100.0
-
-    if transform_type == 'smile':
-        # FR-3.3.1: Move mouth corners up and outward
-        indices = [61, 291, 13, 14, 17, 78, 308]
-        for idx in indices:
-            if idx < len(landmarks):
-                lm = landmarks[idx]
-                sx, sy = lm['x'], lm['y']
-                src_points.append([sx, sy])
-                if idx in [61, 78]:  # left corner
-                    dst_points.append([sx - int(8 * intensity_factor), sy - int(12 * intensity_factor)])
-                elif idx in [291, 308]:  # right corner
-                    dst_points.append([sx + int(8 * intensity_factor), sy - int(12 * intensity_factor)])
-                elif idx in [13, 14]:  # top lip
-                    dst_points.append([sx, sy - int(4 * intensity_factor)])
-                else:
-                    dst_points.append([sx, sy + int(4 * intensity_factor)])
-
-    elif transform_type == 'eyebrow':
-        # FR-3.3.2: Raise eyebrows
-        for idx in LANDMARK_GROUPS['left_eyebrow'] + LANDMARK_GROUPS['right_eyebrow']:
-            if idx < len(landmarks):
-                lm = landmarks[idx]
-                sx, sy = lm['x'], lm['y']
-                src_points.append([sx, sy])
-                dst_points.append([sx, sy - int(15 * intensity_factor)])
-
-    elif transform_type == 'lips':
-        # FR-3.3.3: Widen lips
-        for idx in LANDMARK_GROUPS['lips_outer']:
-            if idx < len(landmarks):
-                lm = landmarks[idx]
-                sx, sy = lm['x'], lm['y']
-                cx = w // 2
-                src_points.append([sx, sy])
-                direction = 1 if sx > cx else -1
-                dst_points.append([sx + int(direction * 10 * intensity_factor), sy])
-
-    elif transform_type == 'slim':
-        # FR-3.3.4: Face slimming
-        for idx in LANDMARK_GROUPS['jaw']:
-            if idx < len(landmarks):
-                lm = landmarks[idx]
-                sx, sy = lm['x'], lm['y']
-                cx = w // 2
-                src_points.append([sx, sy])
-                direction = -1 if sx > cx else 1
-                offset = int(abs(sx - cx) * 0.08 * intensity_factor)
-                dst_points.append([sx + direction * offset, sy])
-
-    if len(src_points) < 3:
-        return image
-
-    src_points = np.array(src_points, dtype=np.float32)
-    dst_points = np.array(dst_points, dtype=np.float32)
-
-    # FR-3.3.5 & FR-3.3.6: Triangle-based geometric deformation
-    result = warp_image_triangles(image, src_points, dst_points)
-    return result
-
-
-def warp_image_triangles(image, src_pts, dst_pts):
-    """
-    FR-3.3.6 & FR-3.3.7: Triangle-based deformation with interpolation.
-    """
-    h, w = image.shape[:2]
-    output = image.copy()
-
-    # Add corner points to ensure full image coverage
-    corners = np.array([[0, 0], [w - 1, 0], [0, h - 1], [w - 1, h - 1],
-                         [w // 2, 0], [0, h // 2], [w - 1, h // 2], [w // 2, h - 1]],
-                        dtype=np.float32)
-
-    all_src = np.vstack([src_pts, corners])
-    all_dst = np.vstack([dst_pts, corners])
-
-    # Delaunay triangulation
-    rect = (0, 0, w, h)
-    subdiv = cv2.Subdiv2D(rect)
-
-    for pt in all_dst:
-        x_c = max(0, min(w - 1, int(pt[0])))
-        y_c = max(0, min(h - 1, int(pt[1])))
-        subdiv.insert((x_c, y_c))
-
-    triangles = subdiv.getTriangleList()
-    output = np.zeros_like(image)
-
-    for tri in triangles:
-        pts_dst = np.array([[tri[0], tri[1]], [tri[2], tri[3]], [tri[4], tri[5]]], dtype=np.float32)
-
-        # Check if triangle is inside image
-        if (pts_dst[:, 0].min() < 0 or pts_dst[:, 0].max() >= w or
-                pts_dst[:, 1].min() < 0 or pts_dst[:, 1].max() >= h):
-            continue
-
-        # Find corresponding source points
-        pts_src = np.zeros_like(pts_dst)
-        for i, pt in enumerate(pts_dst):
-            dists = np.linalg.norm(all_dst - pt, axis=1)
-            idx = np.argmin(dists)
-            pts_src[i] = all_src[idx]
-
-        # Compute affine transform and warp
-        try:
-            M = cv2.getAffineTransform(pts_src, pts_dst)
-            warped = cv2.warpAffine(image, M, (w, h), flags=cv2.INTER_LINEAR, borderMode=cv2.BORDER_REFLECT_101)
-
-            # Create mask for this triangle
-            mask = np.zeros((h, w), dtype=np.uint8)
-            cv2.fillConvexPoly(mask, pts_dst.astype(np.int32), 255)
-
-            mask3 = cv2.cvtColor(mask, cv2.COLOR_GRAY2BGR) / 255.0
-            output = (output * (1 - mask3) + warped * mask3).astype(np.uint8)
-        except cv2.error:
-            continue
-
-    # Blend to minimize artifacts (FR-3.3.8)
-    mask_total = cv2.cvtColor(cv2.cvtColor(output, cv2.COLOR_BGR2GRAY), cv2.COLOR_GRAY2BGR)
-    mask_total = (mask_total > 0).astype(np.float32)
-    output = np.where(mask_total > 0, output, image).astype(np.uint8)
-
-    return output
-
-
-# ─── FR-3.4: Aging & De-Aging ───
-
-def apply_aging(image, intensity, mode='aging'):
-    """
-    FR-3.4.1 to FR-3.4.7: Aging/de-aging using frequency domain manipulation.
-    """
-    gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY).astype(np.float64)
-    h, w = gray.shape
-    intensity_factor = intensity / 100.0
-
-    # FR-3.5.1: Apply 2D FFT
-    f_transform = fft2(gray)
-    f_shifted = fftshift(f_transform)
-
-    rows, cols = gray.shape
-    crow, ccol = rows // 2, cols // 2
-
+# ─── FR-3.4 Aging / De-Aging ───
+def apply_aging(img, intensity, mode='aging'):
+    h, w = img.shape[:2]
+    f = intensity / 100.0
+    channels = []
+    for c in range(3):
+        ch = img[:,:,c].astype(np.float64)
+        F = fftshift(fft2(ch))
+        rows, cols = ch.shape
+        cr, cc = rows//2, cols//2
+        mr = np.sqrt(cr**2+cc**2)
+        Y, X = np.ogrid[:rows,:cols]
+        dist = np.sqrt((X-cc)**2+(Y-cr)**2)
+        if mode == 'aging':
+            cutoff = mr*0.15
+            hp = 1.0/(1.0+(cutoff/(dist+1e-10))**4)
+            F = F * (1.0 + hp*f*1.5)
+        else:
+            cutoff = max(mr*(0.25-0.1*f), mr*0.1)
+            lp = 1.0/(1.0+(dist/(cutoff+1e-10))**4)
+            lp = np.clip(lp+0.15, 0, 1)
+            F = F * lp
+        back = np.clip(np.real(ifft2(fftshift(F))), 0, 255).astype(np.uint8)
+        channels.append(back)
+    result = cv2.merge(channels)
     if mode == 'aging':
-        # FR-3.4.1 & FR-3.4.2: Enhance high-frequency for wrinkles
-        mask = np.ones((rows, cols), dtype=np.float64)
-        # Create high-pass enhancement
-        for i in range(rows):
-            for j in range(cols):
-                dist = np.sqrt((i - crow) ** 2 + (j - ccol) ** 2)
-                radius = min(crow, ccol)
-                if dist < radius * 0.1:
-                    mask[i, j] = 1.0
-                else:
-                    boost = 1.0 + (intensity_factor * 2.0 * (dist / radius))
-                    mask[i, j] = min(boost, 1.0 + intensity_factor * 3.0)
-
-        f_modified = f_shifted * mask
-        img_back = np.real(ifft2(fftshift(f_modified)))
-
-        # FR-3.4.7: Contrast adjustment for realism
-        img_back = np.clip(img_back, 0, 255).astype(np.uint8)
-        clahe = cv2.createCLAHE(clipLimit=2.0 + intensity_factor * 2.0, tileGridSize=(8, 8))
-        img_back = clahe.apply(img_back)
-
-        # Add subtle texture for wrinkle effect
-        noise = np.random.normal(0, intensity_factor * 15, (rows, cols)).astype(np.float64)
-        edges = cv2.Canny(gray.astype(np.uint8), 50, 150).astype(np.float64) / 255.0
-        noise = noise * (0.3 + edges * 0.7)
-        img_back = np.clip(img_back.astype(np.float64) + noise, 0, 255).astype(np.uint8)
-
-        # Yellow/warm tint for aged look
-        result = cv2.cvtColor(img_back, cv2.COLOR_GRAY2BGR)
-        result[:, :, 0] = np.clip(result[:, :, 0].astype(np.float64) * (1 - 0.1 * intensity_factor), 0, 255)
-        result[:, :, 2] = np.clip(result[:, :, 2].astype(np.float64) * (1 + 0.05 * intensity_factor), 0, 255)
-
+        lab = cv2.cvtColor(result, cv2.COLOR_BGR2LAB)
+        lab[:,:,0] = cv2.createCLAHE(clipLimit=1.5+f*2, tileGridSize=(8,8)).apply(lab[:,:,0])
+        result = cv2.cvtColor(lab, cv2.COLOR_LAB2BGR).astype(np.float64)
+        result[:,:,0] *= (1-0.04*f)
+        result[:,:,2] *= (1+0.03*f)
+        result = np.clip(result, 0, 255).astype(np.uint8)
+        gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+        edges = cv2.GaussianBlur(cv2.Canny(gray,50,120).astype(np.float64)/255, (5,5), 1.5)
+        noise = np.random.normal(0, 8*f, (h,w)) * edges
+        for ci in range(3):
+            result[:,:,ci] = np.clip(result[:,:,ci].astype(np.float64)+noise, 0, 255).astype(np.uint8)
     else:
-        # FR-3.4.4 & FR-3.4.5: Low-pass filter for de-aging
-        mask = np.zeros((rows, cols), dtype=np.float64)
-        radius = int(min(crow, ccol) * (0.3 + 0.5 * (1 - intensity_factor)))
-        for i in range(rows):
-            for j in range(cols):
-                dist = np.sqrt((i - crow) ** 2 + (j - ccol) ** 2)
-                if dist <= radius:
-                    mask[i, j] = 1.0
-                else:
-                    # Gaussian falloff
-                    mask[i, j] = np.exp(-((dist - radius) ** 2) / (2 * (radius * 0.3) ** 2))
-
-        # FR-3.4.6: Preserve edges
-        edges = cv2.Canny(gray.astype(np.uint8), 30, 100).astype(np.float64) / 255.0
-        edge_mask_freq = fftshift(fft2(edges))
-        edge_preserve = np.abs(edge_mask_freq) / (np.max(np.abs(edge_mask_freq)) + 1e-10)
-        mask = np.maximum(mask, edge_preserve * 0.3)
-
-        f_modified = f_shifted * mask
-        img_back = np.real(ifft2(fftshift(f_modified)))
-        img_back = np.clip(img_back, 0, 255).astype(np.uint8)
-
-        # Smooth skin while preserving structure
-        bilateral = cv2.bilateralFilter(img_back, 9, 75 * intensity_factor, 75 * intensity_factor)
-        img_back = cv2.addWeighted(img_back, 0.3, bilateral, 0.7, 0)
-
-        result = cv2.cvtColor(img_back, cv2.COLOR_GRAY2BGR)
-        # Slight brightness boost
-        result = np.clip(result.astype(np.float64) * (1 + 0.05 * intensity_factor), 0, 255).astype(np.uint8)
-
+        s = max(int(30*f), 3)
+        result = cv2.bilateralFilter(result, 9, s, s)
+        result = cv2.convertScaleAbs(result, alpha=1+0.05*f, beta=5*f)
     return result
 
+# ─── FR-3.5 Frequency Analysis ───
+def freq_analysis(img):
+    gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY).astype(np.float64)
+    F = fftshift(fft2(gray))
+    mag = np.log1p(np.abs(F))
+    mag_n = ((mag-mag.min())/(mag.max()-mag.min()+1e-10)*255).astype(np.uint8)
+    vis = cv2.applyColorMap(mag_n, cv2.COLORMAP_JET)
+    power = np.abs(F)**2
+    total = float(np.sum(power))
+    rows,cols = gray.shape
+    Y,X = np.ogrid[:rows,:cols]
+    dist = np.sqrt((X-cols//2)**2+(Y-rows//2)**2)
+    low_mask = dist <= min(rows,cols)//8
+    low = float(np.sum(power[low_mask]))
+    high = float(np.sum(power[~low_mask]))
+    return dict(spectrum=enc(vis), total=total, low=low, high=high,
+                ratio=low/(high+1e-10), low_pct=low/(total+1e-10)*100, high_pct=high/(total+1e-10)*100)
 
-# ─── FR-3.5: Frequency Domain Analysis ───
-
-def compute_frequency_analysis(image):
-    """FR-3.5.1 to FR-3.5.6: Full frequency domain analysis."""
-    gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY).astype(np.float64)
-
-    # FR-3.5.1: 2D Fourier Transform
-    f_transform = fft2(gray)
-    f_shifted = fftshift(f_transform)
-
-    # FR-3.5.2: Magnitude spectrum
-    magnitude = np.log1p(np.abs(f_shifted))
-    magnitude_normalized = ((magnitude - magnitude.min()) /
-                            (magnitude.max() - magnitude.min() + 1e-10) * 255).astype(np.uint8)
-
-    # Apply colormap for visualization
-    magnitude_colored = cv2.applyColorMap(magnitude_normalized, cv2.COLORMAP_JET)
-
-    # FR-3.5.3: Total spectral energy
-    power_spectrum = np.abs(f_shifted) ** 2
-    total_energy = float(np.sum(power_spectrum))
-
-    # FR-3.5.4: High and low frequency energy
-    rows, cols = gray.shape
-    crow, ccol = rows // 2, cols // 2
-    radius = min(crow, ccol) // 4
-
-    low_mask = np.zeros((rows, cols), dtype=bool)
-    for i in range(rows):
-        for j in range(cols):
-            if np.sqrt((i - crow) ** 2 + (j - ccol) ** 2) <= radius:
-                low_mask[i, j] = True
-
-    low_energy = float(np.sum(power_spectrum[low_mask]))
-    high_energy = float(np.sum(power_spectrum[~low_mask]))
-
-    # FR-3.5.5: Frequency energy ratios
-    ratio = low_energy / (high_energy + 1e-10)
-
-    return {
-        'spectrum_image': encode_image(magnitude_colored),
-        'total_energy': total_energy,
-        'low_energy': low_energy,
-        'high_energy': high_energy,
-        'lf_hf_ratio': ratio,
-        'low_pct': low_energy / (total_energy + 1e-10) * 100,
-        'high_pct': high_energy / (total_energy + 1e-10) * 100
-    }
-
-
-# ─── FR-3.6: Quantitative Evaluation ───
-
-def compute_metrics(original, transformed):
-    """FR-3.6.1 to FR-3.6.3: Compute MSE, PSNR, SSIM."""
-    orig_gray = cv2.cvtColor(original, cv2.COLOR_BGR2GRAY)
-    trans_gray = cv2.cvtColor(transformed, cv2.COLOR_BGR2GRAY)
-
-    # Ensure same size
-    if orig_gray.shape != trans_gray.shape:
-        trans_gray = cv2.resize(trans_gray, (orig_gray.shape[1], orig_gray.shape[0]))
-
-    # FR-3.6.1: MSE
-    mse_val = float(np.mean((orig_gray.astype(np.float64) - trans_gray.astype(np.float64)) ** 2))
-
-    # FR-3.6.2: PSNR
-    if mse_val == 0:
-        psnr_val = float('inf')
-    else:
-        psnr_val = float(10 * np.log10((255.0 ** 2) / mse_val))
-
-    # FR-3.6.3: SSIM
-    ssim_val = float(ssim(orig_gray, trans_gray))
-
-    return {
-        'mse': round(mse_val, 4),
-        'psnr': round(psnr_val, 4),
-        'ssim': round(ssim_val, 4)
-    }
-
+# ─── FR-3.6 Metrics ───
+def metrics(o, t):
+    g1 = cv2.cvtColor(o, cv2.COLOR_BGR2GRAY)
+    g2 = cv2.cvtColor(t, cv2.COLOR_BGR2GRAY)
+    if g1.shape!=g2.shape: g2=cv2.resize(g2,(g1.shape[1],g1.shape[0]))
+    mse = float(np.mean((g1.astype(np.float64)-g2.astype(np.float64))**2))
+    psnr = 100.0 if mse<1e-10 else float(10*np.log10(255**2/mse))
+    ss = float(compare_ssim(g1, g2))
+    return dict(mse=round(mse,2), psnr=round(psnr,2), ssim=round(ss,4))
 
 # ─── Routes ───
-
 @app.route('/')
-def index():
-    return render_template('index.html')
-
+def index(): return render_template('index.html')
 
 @app.route('/api/upload', methods=['POST'])
-def upload_image():
-    """FR-3.1.1: Upload and preprocess image."""
-    if 'image' not in request.files:
-        return jsonify({'error': 'No image file provided'}), 400
+def api_upload():
+    if 'image' not in request.files: return jsonify(error='No file'), 400
+    f = request.files['image']
+    if not f.filename: return jsonify(error='No file'), 400
+    ext = f.filename.rsplit('.',1)[-1].lower() if '.' in f.filename else ''
+    if ext not in ('jpg','jpeg','png'): return jsonify(error='JPG/PNG only'), 400
+    raw = np.frombuffer(f.read(), np.uint8)
+    img = cv2.imdecode(raw, cv2.IMREAD_COLOR)
+    if img is None: return jsonify(error='Bad image'), 400
+    proc, err = preprocess(img)
+    if err: return jsonify(error=err), 400
+    lm = detect_landmarks(proc)
+    return jsonify(image=enc(proc), landmarks=lm, count=len(lm))
 
-    file = request.files['image']
-    if file.filename == '':
-        return jsonify({'error': 'No file selected'}), 400
-
-    if not allowed_file(file.filename):
-        return jsonify({'error': 'Invalid file format. Only JPG and PNG are supported.'}), 400
-
-    # Read image
-    file_bytes = np.frombuffer(file.read(), np.uint8)
-    image = cv2.imdecode(file_bytes, cv2.IMREAD_COLOR)
-
-    if image is None:
-        return jsonify({'error': 'Could not decode image'}), 400
-
-    # FR-3.1.2 to FR-3.1.7: Preprocess
-    processed, face_box, error = validate_and_preprocess(image)
-    if error:
-        return jsonify({'error': error}), 400
-
-    # FR-3.2.1: Detect landmarks
-    landmarks = detect_landmarks(processed)
-
-    # FR-3.1.3: Return processed image for display
-    return jsonify({
-        'original': encode_image(processed),
-        'landmarks': landmarks,
-        'face_detected': face_box is not None,
-        'image_size': list(STANDARD_SIZE),
-        'landmark_count': len(landmarks)
-    })
-
-
-@app.route('/api/landmarks', methods=['POST'])
-def get_landmarks_image():
-    """FR-3.2.3 & FR-3.2.4: Get image with landmarks drawn."""
-    data = request.get_json()
-    if not data or 'image' not in data:
-        return jsonify({'error': 'No image data'}), 400
-
-    image = decode_image(data['image'])
-    landmarks = data.get('landmarks', [])
-    show = data.get('show', True)
-
-    if show and landmarks:
-        result = draw_landmarks(image, landmarks)
-    else:
-        result = image
-
-    return jsonify({'image': encode_image(result)})
-
+@app.route('/api/landmarks_overlay', methods=['POST'])
+def api_lm():
+    d = request.get_json()
+    img = dec(d['image'])
+    pts = [tuple(p) for p in d['landmarks']]
+    out = draw_lm(img, pts) if d.get('show', True) else img
+    return jsonify(image=enc(out))
 
 @app.route('/api/export_landmarks', methods=['POST'])
-def export_landmarks():
-    """FR-3.2.5: Export landmark coordinates."""
-    data = request.get_json()
-    landmarks = data.get('landmarks', [])
-
-    output = io.StringIO()
-    writer = csv.writer(output)
-    writer.writerow(['Index', 'X', 'Y', 'Normalized_X', 'Normalized_Y'])
-    for i, lm in enumerate(landmarks):
-        writer.writerow([i, lm['x'], lm['y'], round(lm['nx'], 6), round(lm['ny'], 6)])
-
-    mem = io.BytesIO()
-    mem.write(output.getvalue().encode('utf-8'))
-    mem.seek(0)
-
+def api_export_lm():
+    d = request.get_json()
+    buf = io.StringIO()
+    w = csv.writer(buf)
+    w.writerow(['Index','X','Y'])
+    for i,p in enumerate(d.get('landmarks',[])): w.writerow([i,p[0],p[1]])
+    mem = io.BytesIO(buf.getvalue().encode()); mem.seek(0)
     return send_file(mem, mimetype='text/csv', as_attachment=True, download_name='landmarks.csv')
 
-
-@app.route('/api/transform', methods=['POST'])
-def transform_image():
-    """FR-3.3: Apply expression transformation."""
-    data = request.get_json()
-    if not data or 'image' not in data:
-        return jsonify({'error': 'No image data'}), 400
-
-    image = decode_image(data['image'])
-    landmarks = data.get('landmarks', [])
-    transform_type = data.get('type', 'smile')
-    intensity = data.get('intensity', 50)
-
-    # FR-3.3.1 to FR-3.3.9
-    result = apply_expression_warp(image, landmarks, transform_type, intensity)
-
-    # Compute metrics
-    metrics = compute_metrics(image, result)
-
-    return jsonify({
-        'transformed': encode_image(result),
-        'metrics': metrics
-    })
-
+@app.route('/api/expression', methods=['POST'])
+def api_expr():
+    d = request.get_json()
+    img = dec(d['image'])
+    lm = [list(p) for p in d['landmarks']]
+    result = apply_expression(img, lm, d.get('type','smile'), int(d.get('intensity',50)))
+    return jsonify(result=enc(result), metrics=metrics(img, result))
 
 @app.route('/api/aging', methods=['POST'])
-def aging_transform():
-    """FR-3.4: Apply aging/de-aging."""
-    data = request.get_json()
-    if not data or 'image' not in data:
-        return jsonify({'error': 'No image data'}), 400
-
-    image = decode_image(data['image'])
-    mode = data.get('mode', 'aging')
-    intensity = data.get('intensity', 50)
-
-    result = apply_aging(image, intensity, mode)
-
-    # Resize result to match original if needed
-    if result.shape[:2] != image.shape[:2]:
-        result = cv2.resize(result, (image.shape[1], image.shape[0]))
-
-    metrics = compute_metrics(image, result)
-
-    return jsonify({
-        'transformed': encode_image(result),
-        'metrics': metrics
-    })
-
+def api_aging():
+    d = request.get_json()
+    img = dec(d['image'])
+    result = apply_aging(img, int(d.get('intensity',50)), d.get('mode','aging'))
+    return jsonify(result=enc(result), metrics=metrics(img, result))
 
 @app.route('/api/frequency', methods=['POST'])
-def frequency_analysis():
-    """FR-3.5: Frequency domain analysis."""
-    data = request.get_json()
-    if not data or 'image' not in data:
-        return jsonify({'error': 'No image data'}), 400
-
-    image = decode_image(data['image'])
-    analysis = compute_frequency_analysis(image)
-
-    # If transformed image provided, do comparative analysis (FR-3.5.6)
-    if 'transformed' in data:
-        trans_image = decode_image(data['transformed'])
-        trans_analysis = compute_frequency_analysis(trans_image)
-        analysis['transformed_spectrum'] = trans_analysis['spectrum_image']
-        analysis['transformed_energy'] = trans_analysis['total_energy']
-        analysis['transformed_low_energy'] = trans_analysis['low_energy']
-        analysis['transformed_high_energy'] = trans_analysis['high_energy']
-        analysis['transformed_lf_hf_ratio'] = trans_analysis['lf_hf_ratio']
-        analysis['transformed_low_pct'] = trans_analysis['low_pct']
-        analysis['transformed_high_pct'] = trans_analysis['high_pct']
-
-    return jsonify(analysis)
-
-
-@app.route('/api/metrics', methods=['POST'])
-def get_metrics():
-    """FR-3.6: Compute evaluation metrics."""
-    data = request.get_json()
-    if not data or 'original' not in data or 'transformed' not in data:
-        return jsonify({'error': 'Both original and transformed images required'}), 400
-
-    original = decode_image(data['original'])
-    transformed = decode_image(data['transformed'])
-    metrics = compute_metrics(original, transformed)
-
-    return jsonify(metrics)
-
+def api_freq():
+    d = request.get_json()
+    img = dec(d['image'])
+    r = freq_analysis(img)
+    if d.get('transformed'):
+        t = freq_analysis(dec(d['transformed']))
+        r['t_spectrum']=t['spectrum']; r['t_total']=t['total']; r['t_low']=t['low']
+        r['t_high']=t['high']; r['t_ratio']=t['ratio']
+        r['t_low_pct']=t['low_pct']; r['t_high_pct']=t['high_pct']
+    return jsonify(**r)
 
 @app.route('/api/export_metrics', methods=['POST'])
-def export_metrics():
-    """FR-3.6.5: Export metrics as CSV."""
-    data = request.get_json()
-    metrics_list = data.get('metrics', [])
-
-    output = io.StringIO()
-    writer = csv.writer(output)
-    writer.writerow(['Transformation', 'MSE', 'PSNR', 'SSIM'])
-    for m in metrics_list:
-        writer.writerow([m.get('name', ''), m.get('mse', ''), m.get('psnr', ''), m.get('ssim', '')])
-
-    mem = io.BytesIO()
-    mem.write(output.getvalue().encode('utf-8'))
-    mem.seek(0)
-
-    return send_file(mem, mimetype='text/csv', as_attachment=True, download_name='metrics_report.csv')
-
-
-@app.route('/api/save_image', methods=['POST'])
-def save_image():
-    """FR-3.7.3: Save processed image."""
-    data = request.get_json()
-    if not data or 'image' not in data:
-        return jsonify({'error': 'No image data'}), 400
-
-    image = decode_image(data['image'])
-    filename = f"processed_{uuid.uuid4().hex[:8]}.png"
-    filepath = os.path.join(RESULTS_FOLDER, filename)
-    cv2.imwrite(filepath, image)
-
-    return jsonify({'filename': filename, 'path': filepath})
-
+def api_export_m():
+    d = request.get_json()
+    buf = io.StringIO()
+    w = csv.writer(buf)
+    w.writerow(['Transformation','MSE','PSNR','SSIM'])
+    for r in d.get('rows',[]): w.writerow([r.get('name',''),r.get('mse',''),r.get('psnr',''),r.get('ssim','')])
+    mem = io.BytesIO(buf.getvalue().encode()); mem.seek(0)
+    return send_file(mem, mimetype='text/csv', as_attachment=True, download_name='metrics.csv')
 
 if __name__ == '__main__':
-    app.run(debug=True, port=5000)
+    app.run(debug=True, host='127.0.0.1', port=5000)

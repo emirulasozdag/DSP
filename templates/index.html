@@ -3,392 +3,288 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Facial Image Warping, Aging & Expression Transformation</title>
+    <title>FaceTransform DSP</title>
     <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
-    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css">
 </head>
 <body>
-    <!-- Header -->
-    <header class="header">
-        <div class="header-content">
-            <div class="logo">
-                <i class="fas fa-face-smile-beam"></i>
-                <div>
-                    <h1>FaceTransform DSP</h1>
-                    <p>Facial Image Warping, Aging & Expression Transformation</p>
+    <div id="app">
+        <!-- SIDEBAR -->
+        <aside class="sidebar">
+            <div class="sidebar-logo">
+                <div class="logo-icon"><i class="fas fa-atom"></i></div>
+                <div class="logo-text">
+                    <span class="logo-title">FaceTransform</span>
+                    <span class="logo-sub">DSP Pipeline</span>
                 </div>
             </div>
-            <div class="header-info">
-                <span>CENG 384 – DSP Project</span>
-                <span>Prof. Dr. Hakan Çağlar</span>
+            <nav class="sidebar-nav">
+                <button class="nav-item active" data-tab="upload">
+                    <i class="fas fa-cloud-arrow-up"></i><span>Upload</span>
+                </button>
+                <button class="nav-item" data-tab="landmarks" disabled>
+                    <i class="fas fa-draw-polygon"></i><span>Landmarks</span>
+                </button>
+                <button class="nav-item" data-tab="expression" disabled>
+                    <i class="fas fa-face-laugh-beam"></i><span>Expression</span>
+                </button>
+                <button class="nav-item" data-tab="aging" disabled>
+                    <i class="fas fa-hourglass-half"></i><span>Age Sim</span>
+                </button>
+                <button class="nav-item" data-tab="frequency" disabled>
+                    <i class="fas fa-wave-square"></i><span>Frequency</span>
+                </button>
+                <button class="nav-item" data-tab="metrics" disabled>
+                    <i class="fas fa-chart-column"></i><span>Metrics</span>
+                </button>
+            </nav>
+            <div class="sidebar-footer">
+                <small>CENG 384 &bull; DSP</small>
+                <small>Prof. Dr. Hakan Çağlar</small>
             </div>
-        </div>
-    </header>
+        </aside>
 
-    <!-- Navigation Tabs -->
-    <nav class="nav-tabs">
-        <button class="tab-btn active" data-tab="upload"><i class="fas fa-upload"></i> Image Upload</button>
-        <button class="tab-btn" data-tab="landmarks" disabled><i class="fas fa-map-pin"></i> Landmarks</button>
-        <button class="tab-btn" data-tab="expression" disabled><i class="fas fa-face-laugh"></i> Expression</button>
-        <button class="tab-btn" data-tab="aging" disabled><i class="fas fa-clock-rotate-left"></i> Aging / De-Aging</button>
-        <button class="tab-btn" data-tab="frequency" disabled><i class="fas fa-wave-square"></i> Frequency Analysis</button>
-        <button class="tab-btn" data-tab="metrics" disabled><i class="fas fa-chart-bar"></i> Metrics</button>
-    </nav>
-
-    <main class="main-content">
-        <!-- ═══════════ TAB 1: Upload ═══════════ -->
-        <section id="tab-upload" class="tab-content active">
-            <div class="section-header">
-                <h2><i class="fas fa-cloud-arrow-up"></i> Image Input & Preprocessing</h2>
-                <p>FR-3.1: Upload a frontal face image (JPG/PNG). The system will validate, detect face, crop, normalize, and resize.</p>
-            </div>
-            <div class="upload-area" id="dropZone">
-                <div class="upload-placeholder" id="uploadPlaceholder">
-                    <i class="fas fa-cloud-arrow-up"></i>
-                    <h3>Drop your facial image here</h3>
-                    <p>or click to browse • JPG, PNG • Max 16MB</p>
-                    <button class="btn btn-primary" onclick="document.getElementById('fileInput').click()">
-                        <i class="fas fa-folder-open"></i> Choose File
-                    </button>
-                    <input type="file" id="fileInput" accept=".jpg,.jpeg,.png" hidden>
+        <!-- MAIN -->
+        <main class="content">
+            <!-- ───── UPLOAD ───── -->
+            <section class="page active" id="page-upload">
+                <div class="page-head">
+                    <h1>Image Upload</h1>
+                    <p class="subtitle">FR-3.1 &mdash; Upload a frontal face image. The system validates format, detects the face, crops, normalizes and resizes to 512&times;512.</p>
                 </div>
-                <div class="upload-preview" id="uploadPreview" style="display:none">
-                    <div class="preview-grid">
-                        <div class="preview-card">
-                            <h4>Uploaded Image</h4>
-                            <img id="previewOriginal" alt="Original">
+                <div class="drop-zone" id="dropZone">
+                    <div class="drop-inner" id="dropInner">
+                        <i class="fas fa-cloud-arrow-up drop-icon"></i>
+                        <h2>Drop image here</h2>
+                        <p>or click to browse &bull; JPG / PNG &bull; max 16 MB</p>
+                        <label class="btn btn-primary" for="fileIn"><i class="fas fa-folder-open"></i> Choose File</label>
+                        <input type="file" id="fileIn" accept=".jpg,.jpeg,.png" hidden>
+                    </div>
+                    <div class="drop-result hidden" id="dropResult">
+                        <div class="img-pair">
+                            <div class="img-box">
+                                <span class="img-label">Original</span>
+                                <img id="prevOrig">
+                            </div>
+                            <div class="img-box">
+                                <span class="img-label">Preprocessed 512&times;512</span>
+                                <img id="prevProc">
+                            </div>
                         </div>
-                        <div class="preview-card">
-                            <h4>Preprocessed (512×512)</h4>
-                            <img id="previewProcessed" alt="Processed">
+                        <div class="info-bar" id="infoBar"></div>
+                        <div class="btn-row">
+                            <button class="btn btn-ghost" onclick="resetUpload()"><i class="fas fa-rotate"></i> New Image</button>
+                            <button class="btn btn-primary" onclick="goTab('landmarks')"><i class="fas fa-arrow-right"></i> Continue</button>
                         </div>
-                    </div>
-                    <div class="upload-info" id="uploadInfo"></div>
-                    <div class="actions">
-                        <button class="btn btn-secondary" onclick="resetUpload()">
-                            <i class="fas fa-redo"></i> Upload New
-                        </button>
-                        <button class="btn btn-primary" onclick="proceedToLandmarks()">
-                            <i class="fas fa-arrow-right"></i> Proceed to Landmarks
-                        </button>
-                    </div>
-                </div>
-            </div>
-        </section>
-
-        <!-- ═══════════ TAB 2: Landmarks ═══════════ -->
-        <section id="tab-landmarks" class="tab-content">
-            <div class="section-header">
-                <h2><i class="fas fa-map-pin"></i> Facial Landmark Detection</h2>
-                <p>FR-3.2: 468-point MediaPipe face mesh landmarks detected and displayed.</p>
-            </div>
-            <div class="panel-row">
-                <div class="panel">
-                    <h4>Landmark Visualization</h4>
-                    <div class="image-display">
-                        <img id="landmarkImage" alt="Landmarks">
-                    </div>
-                    <div class="controls-row">
-                        <label class="toggle-label">
-                            <input type="checkbox" id="toggleLandmarks" checked onchange="toggleLandmarkVisibility()">
-                            <span class="toggle-switch"></span>
-                            Show Landmarks (FR-3.2.4)
-                        </label>
-                        <button class="btn btn-sm" onclick="exportLandmarks()">
-                            <i class="fas fa-download"></i> Export Coordinates (FR-3.2.5)
-                        </button>
                     </div>
                 </div>
-                <div class="panel">
-                    <h4>Landmark Statistics</h4>
-                    <div class="stat-grid" id="landmarkStats">
-                        <div class="stat-card">
-                            <span class="stat-value" id="landmarkCount">0</span>
-                            <span class="stat-label">Total Points</span>
-                        </div>
-                        <div class="stat-card">
-                            <span class="stat-value">MediaPipe</span>
-                            <span class="stat-label">Detection Model (FR-3.2.2)</span>
-                        </div>
-                        <div class="stat-card">
-                            <span class="stat-value">468</span>
-                            <span class="stat-label">Face Mesh Points</span>
-                        </div>
-                        <div class="stat-card">
-                            <span class="stat-value">Real-time</span>
-                            <span class="stat-label">Detection Speed</span>
+            </section>
+
+            <!-- ───── LANDMARKS ───── -->
+            <section class="page" id="page-landmarks">
+                <div class="page-head">
+                    <h1>Facial Landmarks</h1>
+                    <p class="subtitle">FR-3.2 &mdash; MediaPipe Face Mesh detects 478 landmark points on the face.</p>
+                </div>
+                <div class="two-col">
+                    <div class="card">
+                        <div class="card-head">Landmark Visualization</div>
+                        <div class="img-frame"><img id="lmImg"></div>
+                        <div class="card-actions">
+                            <label class="switch-label">
+                                <input type="checkbox" id="lmToggle" checked onchange="toggleLM()">
+                                <span class="switch"></span> Show Points
+                            </label>
+                            <button class="btn btn-sm" onclick="exportLM()"><i class="fas fa-download"></i> Export CSV</button>
                         </div>
                     </div>
-                    <h4 style="margin-top:1rem">Landmark Groups</h4>
-                    <div class="landmark-groups">
-                        <span class="group-badge"><i class="fas fa-eye"></i> Eyes</span>
-                        <span class="group-badge"><i class="fas fa-nose"></i> Nose</span>
-                        <span class="group-badge"><i class="fas fa-lips"></i> Mouth</span>
-                        <span class="group-badge">Eyebrows</span>
-                        <span class="group-badge">Jaw</span>
-                        <span class="group-badge">Cheeks</span>
-                        <span class="group-badge">Forehead</span>
+                    <div class="card">
+                        <div class="card-head">Statistics</div>
+                        <div class="stat-grid">
+                            <div class="stat"><span class="stat-n" id="lmCount">0</span><span class="stat-l">Points Detected</span></div>
+                            <div class="stat"><span class="stat-n">MediaPipe</span><span class="stat-l">Model (FR-3.2.2)</span></div>
+                            <div class="stat"><span class="stat-n">478</span><span class="stat-l">Mesh Vertices</span></div>
+                            <div class="stat"><span class="stat-n">&lt; 1 s</span><span class="stat-l">Detection Speed</span></div>
+                        </div>
+                        <div class="card-head" style="margin-top:1.2rem">Regions</div>
+                        <div class="badge-row">
+                            <span class="badge">Eyes</span><span class="badge">Nose</span><span class="badge">Mouth</span>
+                            <span class="badge">Eyebrows</span><span class="badge">Jaw</span><span class="badge">Cheeks</span>
+                        </div>
                     </div>
                 </div>
-            </div>
-        </section>
+            </section>
 
-        <!-- ═══════════ TAB 3: Expression ═══════════ -->
-        <section id="tab-expression" class="tab-content">
-            <div class="section-header">
-                <h2><i class="fas fa-face-laugh"></i> Expression Manipulation</h2>
-                <p>FR-3.3: Geometric warping using Delaunay triangulation and affine transforms.</p>
-            </div>
-            <div class="panel-row">
-                <div class="panel controls-panel">
-                    <h4>Transformation Controls (FR-3.3.9)</h4>
-
-                    <div class="transform-card" data-type="smile">
-                        <div class="transform-header">
-                            <i class="fas fa-face-smile"></i>
-                            <span>Smile Enhancement (FR-3.3.1)</span>
+            <!-- ───── EXPRESSION ───── -->
+            <section class="page" id="page-expression">
+                <div class="page-head">
+                    <h1>Expression Manipulation</h1>
+                    <p class="subtitle">FR-3.3 &mdash; Geometric warping via Delaunay triangulation &amp; affine transforms.</p>
+                </div>
+                <div class="two-col">
+                    <div class="card controls-card">
+                        <div class="card-head">Controls</div>
+                        <div class="ctrl" data-t="smile">
+                            <div class="ctrl-top"><i class="fas fa-face-smile"></i> Smile Enhancement <small>FR-3.3.1</small></div>
+                            <input type="range" class="range" id="r_smile" min="0" max="100" value="50">
+                            <div class="range-row"><span>0%</span><span class="rv" id="v_smile">50%</span><span>100%</span></div>
+                            <button class="btn btn-accent btn-block" onclick="doExpr('smile')">Apply</button>
                         </div>
-                        <input type="range" class="slider" id="smileSlider" min="0" max="100" value="50">
-                        <div class="slider-labels"><span>0%</span><span id="smileValue">50%</span><span>100%</span></div>
-                        <button class="btn btn-sm btn-apply" onclick="applyTransform('smile')">Apply</button>
+                        <div class="ctrl" data-t="eyebrow">
+                            <div class="ctrl-top"><i class="fas fa-arrows-up-to-line"></i> Eyebrow Raise <small>FR-3.3.2</small></div>
+                            <input type="range" class="range" id="r_eyebrow" min="0" max="100" value="50">
+                            <div class="range-row"><span>0%</span><span class="rv" id="v_eyebrow">50%</span><span>100%</span></div>
+                            <button class="btn btn-accent btn-block" onclick="doExpr('eyebrow')">Apply</button>
+                        </div>
+                        <div class="ctrl" data-t="lips">
+                            <div class="ctrl-top"><i class="fas fa-left-right"></i> Lip Widening <small>FR-3.3.3</small></div>
+                            <input type="range" class="range" id="r_lips" min="0" max="100" value="50">
+                            <div class="range-row"><span>0%</span><span class="rv" id="v_lips">50%</span><span>100%</span></div>
+                            <button class="btn btn-accent btn-block" onclick="doExpr('lips')">Apply</button>
+                        </div>
+                        <div class="ctrl" data-t="slim">
+                            <div class="ctrl-top"><i class="fas fa-compress"></i> Face Slimming <small>FR-3.3.4</small></div>
+                            <input type="range" class="range" id="r_slim" min="0" max="100" value="50">
+                            <div class="range-row"><span>0%</span><span class="rv" id="v_slim">50%</span><span>100%</span></div>
+                            <button class="btn btn-accent btn-block" onclick="doExpr('slim')">Apply</button>
+                        </div>
                     </div>
-
-                    <div class="transform-card" data-type="eyebrow">
-                        <div class="transform-header">
-                            <i class="fas fa-arrows-up-to-line"></i>
-                            <span>Eyebrow Raising (FR-3.3.2)</span>
+                    <div class="card">
+                        <div class="card-head">Comparison <small>FR-3.7.1</small></div>
+                        <div class="cmp">
+                            <div class="cmp-box"><span class="cmp-label">Original</span><img id="exOrig"></div>
+                            <div class="cmp-box"><span class="cmp-label">Result</span><img id="exRes"></div>
                         </div>
-                        <input type="range" class="slider" id="eyebrowSlider" min="0" max="100" value="50">
-                        <div class="slider-labels"><span>0%</span><span id="eyebrowValue">50%</span><span>100%</span></div>
-                        <button class="btn btn-sm btn-apply" onclick="applyTransform('eyebrow')">Apply</button>
-                    </div>
-
-                    <div class="transform-card" data-type="lips">
-                        <div class="transform-header">
-                            <i class="fas fa-left-right"></i>
-                            <span>Lip Widening (FR-3.3.3)</span>
+                        <div class="mini-m" id="exMetrics"></div>
+                        <div class="btn-row">
+                            <button class="btn btn-sm" onclick="saveImg('exRes')"><i class="fas fa-download"></i> Save</button>
+                            <button class="btn btn-sm" onclick="doFreq('expression')"><i class="fas fa-wave-square"></i> Spectrum</button>
                         </div>
-                        <input type="range" class="slider" id="lipsSlider" min="0" max="100" value="50">
-                        <div class="slider-labels"><span>0%</span><span id="lipsValue">50%</span><span>100%</span></div>
-                        <button class="btn btn-sm btn-apply" onclick="applyTransform('lips')">Apply</button>
-                    </div>
-
-                    <div class="transform-card" data-type="slim">
-                        <div class="transform-header">
-                            <i class="fas fa-compress"></i>
-                            <span>Face Slimming (FR-3.3.4)</span>
-                        </div>
-                        <input type="range" class="slider" id="slimSlider" min="0" max="100" value="50">
-                        <div class="slider-labels"><span>0%</span><span id="slimValue">50%</span><span>100%</span></div>
-                        <button class="btn btn-sm btn-apply" onclick="applyTransform('slim')">Apply</button>
                     </div>
                 </div>
+            </section>
 
-                <div class="panel comparison-panel">
-                    <h4>Side-by-Side Comparison (FR-3.7.1)</h4>
-                    <div class="comparison-grid">
-                        <div class="comparison-card">
-                            <span class="comparison-label">Original</span>
-                            <img id="exprOriginal" alt="Original">
-                        </div>
-                        <div class="comparison-card">
-                            <span class="comparison-label">Transformed</span>
-                            <img id="exprTransformed" alt="Transformed">
-                        </div>
-                    </div>
-                    <div class="mini-metrics" id="exprMetrics"></div>
-                    <div class="actions">
-                        <button class="btn btn-sm" onclick="saveImage('exprTransformed')">
-                            <i class="fas fa-save"></i> Save Image (FR-3.7.3)
-                        </button>
-                        <button class="btn btn-sm" onclick="analyzeFrequency('expression')">
-                            <i class="fas fa-wave-square"></i> Frequency Analysis
-                        </button>
-                    </div>
+            <!-- ───── AGING ───── -->
+            <section class="page" id="page-aging">
+                <div class="page-head">
+                    <h1>Aging &amp; De-Aging</h1>
+                    <p class="subtitle">FR-3.4 &mdash; Frequency-domain manipulation: high-pass boost for aging, Butterworth low-pass for de-aging.</p>
                 </div>
-            </div>
-        </section>
-
-        <!-- ═══════════ TAB 4: Aging ═══════════ -->
-        <section id="tab-aging" class="tab-content">
-            <div class="section-header">
-                <h2><i class="fas fa-clock-rotate-left"></i> Aging & De-Aging Simulation</h2>
-                <p>FR-3.4: Frequency-domain manipulation for aging (high-freq boost) and de-aging (low-pass filtering).</p>
-            </div>
-            <div class="panel-row">
-                <div class="panel controls-panel">
-                    <h4>Aging Controls</h4>
-
-                    <div class="transform-card" data-type="aging">
-                        <div class="transform-header">
-                            <i class="fas fa-person-cane"></i>
-                            <span>Aging Simulation (FR-3.4.1)</span>
+                <div class="two-col">
+                    <div class="card controls-card">
+                        <div class="card-head">Controls</div>
+                        <div class="ctrl">
+                            <div class="ctrl-top"><i class="fas fa-person-cane"></i> Aging <small>FR-3.4.1</small></div>
+                            <div class="tag-row"><span class="tag">FFT</span><span class="tag">High-Pass</span><span class="tag">CLAHE</span><span class="tag">Wrinkle Texture</span></div>
+                            <input type="range" class="range" id="r_aging" min="0" max="100" value="50">
+                            <div class="range-row"><span>0%</span><span class="rv" id="v_aging">50%</span><span>100%</span></div>
+                            <button class="btn btn-accent btn-block" onclick="doAge('aging')">Apply Aging</button>
                         </div>
-                        <div class="technique-tags">
-                            <span class="tag">FFT</span>
-                            <span class="tag">High-Pass</span>
-                            <span class="tag">Wrinkle Enhancement</span>
-                            <span class="tag">Contrast Adj.</span>
+                        <div class="ctrl">
+                            <div class="ctrl-top"><i class="fas fa-child"></i> De-Aging <small>FR-3.4.4</small></div>
+                            <div class="tag-row"><span class="tag">Low-Pass</span><span class="tag">Bilateral</span><span class="tag">Edge Preserve</span></div>
+                            <input type="range" class="range" id="r_deaging" min="0" max="100" value="50">
+                            <div class="range-row"><span>0%</span><span class="rv" id="v_deaging">50%</span><span>100%</span></div>
+                            <button class="btn btn-accent btn-block" onclick="doAge('deaging')">Apply De-Aging</button>
                         </div>
-                        <input type="range" class="slider" id="agingSlider" min="0" max="100" value="50">
-                        <div class="slider-labels"><span>0%</span><span id="agingValue">50%</span><span>100%</span></div>
-                        <button class="btn btn-sm btn-apply" onclick="applyAging('aging')">Apply Aging</button>
-                    </div>
-
-                    <div class="transform-card" data-type="deaging">
-                        <div class="transform-header">
-                            <i class="fas fa-child"></i>
-                            <span>De-Aging Simulation (FR-3.4.4)</span>
-                        </div>
-                        <div class="technique-tags">
-                            <span class="tag">Low-Pass Filter</span>
-                            <span class="tag">Skin Smoothing</span>
-                            <span class="tag">Edge Preserve</span>
-                            <span class="tag">Bilateral</span>
-                        </div>
-                        <input type="range" class="slider" id="deagingSlider" min="0" max="100" value="50">
-                        <div class="slider-labels"><span>0%</span><span id="deagingValue">50%</span><span>100%</span></div>
-                        <button class="btn btn-sm btn-apply" onclick="applyAging('deaging')">Apply De-Aging</button>
-                    </div>
-
-                    <div class="info-card">
-                        <h5><i class="fas fa-info-circle"></i> Processing Pipeline</h5>
-                        <ol>
-                            <li>Convert to grayscale</li>
-                            <li>Apply 2D FFT (FR-3.5.1)</li>
-                            <li>Frequency manipulation</li>
-                            <li>Inverse FFT reconstruction</li>
-                            <li>Post-processing & tone adj. (FR-3.4.7)</li>
-                        </ol>
-                    </div>
-                </div>
-
-                <div class="panel comparison-panel">
-                    <h4>Side-by-Side Comparison (FR-3.7.1)</h4>
-                    <div class="comparison-grid">
-                        <div class="comparison-card">
-                            <span class="comparison-label">Original</span>
-                            <img id="agingOriginal" alt="Original">
-                        </div>
-                        <div class="comparison-card">
-                            <span class="comparison-label">Transformed</span>
-                            <img id="agingTransformed" alt="Transformed">
+                        <div class="info-box">
+                            <strong><i class="fas fa-microchip"></i> Pipeline</strong>
+                            <ol>
+                                <li>Per-channel 2D FFT</li>
+                                <li>Butterworth frequency mask</li>
+                                <li>Inverse FFT reconstruction</li>
+                                <li>CLAHE / bilateral post-processing</li>
+                                <li>Tone &amp; texture adjustments</li>
+                            </ol>
                         </div>
                     </div>
-                    <div class="mini-metrics" id="agingMetrics"></div>
-                    <div class="actions">
-                        <button class="btn btn-sm" onclick="saveImage('agingTransformed')">
-                            <i class="fas fa-save"></i> Save Image
-                        </button>
-                        <button class="btn btn-sm" onclick="analyzeFrequency('aging')">
-                            <i class="fas fa-wave-square"></i> Frequency Analysis
-                        </button>
+                    <div class="card">
+                        <div class="card-head">Comparison</div>
+                        <div class="cmp">
+                            <div class="cmp-box"><span class="cmp-label">Original</span><img id="agOrig"></div>
+                            <div class="cmp-box"><span class="cmp-label">Result</span><img id="agRes"></div>
+                        </div>
+                        <div class="mini-m" id="agMetrics"></div>
+                        <div class="btn-row">
+                            <button class="btn btn-sm" onclick="saveImg('agRes')"><i class="fas fa-download"></i> Save</button>
+                            <button class="btn btn-sm" onclick="doFreq('aging')"><i class="fas fa-wave-square"></i> Spectrum</button>
+                        </div>
                     </div>
                 </div>
-            </div>
-        </section>
+            </section>
 
-        <!-- ═══════════ TAB 5: Frequency ═══════════ -->
-        <section id="tab-frequency" class="tab-content">
-            <div class="section-header">
-                <h2><i class="fas fa-wave-square"></i> Frequency Domain Analysis</h2>
-                <p>FR-3.5: 2D Fourier Transform, magnitude spectrum, spectral energy analysis.</p>
-            </div>
-            <div class="panel-row">
-                <div class="panel">
-                    <h4>Original Image Spectrum (FR-3.5.2)</h4>
-                    <div class="image-display spectrum-display">
-                        <img id="origSpectrum" alt="Original Spectrum">
+            <!-- ───── FREQUENCY ───── -->
+            <section class="page" id="page-frequency">
+                <div class="page-head">
+                    <h1>Frequency Analysis</h1>
+                    <p class="subtitle">FR-3.5 &mdash; 2D Fourier Transform, magnitude spectrum, spectral energy distribution.</p>
+                </div>
+                <div class="two-col">
+                    <div class="card">
+                        <div class="card-head">Original Spectrum</div>
+                        <div class="img-frame spec-frame"><img id="specOrig"></div>
+                        <div class="e-grid" id="eOrig"></div>
                     </div>
-                    <div class="energy-stats" id="origEnergyStats"></div>
-                </div>
-                <div class="panel">
-                    <h4>Transformed Image Spectrum</h4>
-                    <div class="image-display spectrum-display">
-                        <img id="transSpectrum" alt="Transformed Spectrum">
+                    <div class="card">
+                        <div class="card-head">Transformed Spectrum</div>
+                        <div class="img-frame spec-frame"><img id="specTrans"></div>
+                        <div class="e-grid" id="eTrans"></div>
                     </div>
-                    <div class="energy-stats" id="transEnergyStats"></div>
                 </div>
-            </div>
-            <div class="panel full-width">
-                <h4>Comparative Frequency Analysis (FR-3.5.6)</h4>
-                <div class="freq-comparison-table" id="freqComparisonTable">
-                    <p class="placeholder-text">Apply a transformation first, then view frequency analysis.</p>
+                <div class="card" style="margin-top:1rem">
+                    <div class="card-head">Comparative Analysis <small>FR-3.5.6</small></div>
+                    <div id="freqTable"><p class="muted center">Apply a transformation first.</p></div>
                 </div>
-            </div>
-        </section>
+            </section>
 
-        <!-- ═══════════ TAB 6: Metrics ═══════════ -->
-        <section id="tab-metrics" class="tab-content">
-            <div class="section-header">
-                <h2><i class="fas fa-chart-bar"></i> Quantitative Evaluation</h2>
-                <p>FR-3.6: MSE, PSNR, SSIM metrics for all transformations.</p>
-            </div>
-            <div class="panel full-width">
-                <h4>Evaluation Results (FR-3.6.4)</h4>
-                <table class="metrics-table" id="metricsTable">
-                    <thead>
-                        <tr>
-                            <th>Transformation</th>
-                            <th>MSE <i class="fas fa-info-circle" title="Mean Squared Error - lower is better"></i></th>
-                            <th>PSNR (dB) <i class="fas fa-info-circle" title="Peak Signal-to-Noise Ratio - higher is better"></i></th>
-                            <th>SSIM <i class="fas fa-info-circle" title="Structural Similarity Index - closer to 1 is better"></i></th>
-                        </tr>
-                    </thead>
-                    <tbody id="metricsBody">
-                        <tr class="placeholder-row">
-                            <td colspan="4">No transformations applied yet. Apply transformations to see metrics here.</td>
-                        </tr>
-                    </tbody>
-                </table>
-                <div class="actions" style="margin-top:1rem">
-                    <button class="btn btn-primary" onclick="exportMetricsCSV()">
-                        <i class="fas fa-file-csv"></i> Export as CSV (FR-3.6.5)
-                    </button>
-                    <button class="btn btn-secondary" onclick="exportMetricsPDF()">
-                        <i class="fas fa-file-pdf"></i> Export as PDF (FR-3.6.5)
-                    </button>
+            <!-- ───── METRICS ───── -->
+            <section class="page" id="page-metrics">
+                <div class="page-head">
+                    <h1>Quantitative Evaluation</h1>
+                    <p class="subtitle">FR-3.6 &mdash; MSE, PSNR, SSIM across all transformations.</p>
                 </div>
-            </div>
-
-            <div class="panel full-width" style="margin-top:1rem">
-                <h4>Metric Descriptions</h4>
-                <div class="metric-descriptions">
-                    <div class="metric-desc-card">
-                        <h5>MSE (Mean Squared Error)</h5>
-                        <p>Measures the average squared difference between pixel values. Lower values indicate higher similarity.</p>
-                        <code>MSE = (1/N) × Σ(Original - Transformed)²</code>
-                    </div>
-                    <div class="metric-desc-card">
-                        <h5>PSNR (Peak Signal-to-Noise Ratio)</h5>
-                        <p>Measures image quality in decibels. Higher values indicate better quality. Typically 30-50 dB for good quality.</p>
-                        <code>PSNR = 10 × log₁₀(MAX² / MSE)</code>
-                    </div>
-                    <div class="metric-desc-card">
-                        <h5>SSIM (Structural Similarity Index)</h5>
-                        <p>Measures structural similarity considering luminance, contrast, and structure. Range [0, 1], closer to 1 is better.</p>
-                        <code>SSIM = f(luminance, contrast, structure)</code>
+                <div class="card">
+                    <div class="card-head">Results Table <small>FR-3.6.4</small></div>
+                    <table class="m-table">
+                        <thead><tr><th>Transformation</th><th>MSE</th><th>PSNR (dB)</th><th>SSIM</th></tr></thead>
+                        <tbody id="mBody"><tr><td colspan="4" class="muted center">No data yet</td></tr></tbody>
+                    </table>
+                    <div class="btn-row" style="margin-top:1rem">
+                        <button class="btn btn-primary" onclick="exportCSV()"><i class="fas fa-file-csv"></i> Export CSV</button>
+                        <button class="btn btn-ghost" onclick="exportPDF()"><i class="fas fa-file-pdf"></i> Print / PDF</button>
                     </div>
                 </div>
-            </div>
-        </section>
-    </main>
-
-    <!-- Loading Overlay -->
-    <div class="loading-overlay" id="loadingOverlay">
-        <div class="loading-spinner">
-            <div class="spinner"></div>
-            <p id="loadingText">Processing...</p>
-        </div>
+                <div class="card" style="margin-top:1rem">
+                    <div class="card-head">Metric Reference</div>
+                    <div class="three-col">
+                        <div class="ref-card">
+                            <h4>MSE</h4>
+                            <p>Mean Squared Error &mdash; average pixel difference squared. <strong>Lower = better.</strong></p>
+                            <code>MSE = &frac1N; &Sigma;(O &minus; T)&sup2;</code>
+                        </div>
+                        <div class="ref-card">
+                            <h4>PSNR</h4>
+                            <p>Peak Signal-to-Noise Ratio in dB. <strong>Higher = better.</strong> &gt;30 dB is good.</p>
+                            <code>PSNR = 10 log&#8321;&#8320;(MAX&sup2; / MSE)</code>
+                        </div>
+                        <div class="ref-card">
+                            <h4>SSIM</h4>
+                            <p>Structural Similarity. Range [0,1]. <strong>Closer to 1 = better.</strong></p>
+                            <code>SSIM = f(lum, contrast, structure)</code>
+                        </div>
+                    </div>
+                </div>
+            </section>
+        </main>
     </div>
 
-    <!-- Toast Notification -->
+    <!-- LOADER -->
+    <div class="loader-overlay" id="loader">
+        <div class="loader-box"><div class="spinner"></div><p id="loaderTxt">Processing&hellip;</p></div>
+    </div>
+    <!-- TOAST -->
     <div class="toast" id="toast"></div>
-
-    <footer class="footer">
-        <p>Facial Image Warping, Aging & Expression Transformation — CENG 384 DSP Project — Ankara Science University</p>
-    </footer>
 
     <script src="{{ url_for('static', filename='js/app.js') }}"></script>
 </body>
