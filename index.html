@@ -65,6 +65,8 @@
       <div class="dz-or">or</div>
       <button class="btn btn-primary btn-sm" id="browseBtn">Browse Files</button>
       <input type="file" id="fileInput" accept=".jpg,.jpeg,.png" hidden/>
+      <div class="dz-or">or</div>
+      <button class="btn btn-outline btn-sm" id="webcamBtn" type="button">📷 Use Webcam</button>
       <div class="dz-hint">JPG / PNG · Frontal face · Max 10 MB</div>
     </div>
   </div>
@@ -85,6 +87,22 @@
           <button class="btn btn-ghost" id="btnRemove">Remove</button>
         </div>
       </div>
+    </div>
+  </div>
+
+  <!-- Webcam panel -->
+  <div class="card webcam-card" id="webcamCard" style="display:none">
+    <div class="card-head">
+      <h3>Webcam Capture</h3>
+      <button class="btn btn-ghost btn-xs" id="btnCloseWebcam">✕ Close</button>
+    </div>
+    <div class="webcam-body">
+      <video id="webcamVideo" autoplay playsinline muted></video>
+      <canvas id="webcamCanvas" hidden></canvas>
+    </div>
+    <div class="webcam-actions">
+      <button class="btn btn-primary" id="btnCapture">📸 Capture Frame</button>
+      <button class="btn btn-ghost" id="btnCancelWebcam">Cancel</button>
     </div>
   </div>
 
@@ -322,6 +340,19 @@
       <label class="sw" style="margin-top:.5rem"><input type="checkbox" checked/><span class="sw-track"></span><span class="sw-label">Minimize distortions</span></label>
 
       <button class="btn btn-primary btn-full" style="margin-top:1rem" id="btnApplyExpr">▶ Apply Warp</button>
+
+      <div class="ctrl-divider"></div>
+      <div class="card-head"><h3>Reference Expression</h3></div>
+      <p class="card-desc" style="margin:0 0 10px">Upload a reference face to transfer its expression via AI.</p>
+      <div class="ref-drop" id="refDrop">
+        <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="8" r="4"/><path d="M6 20v-2a6 6 0 0112 0v2"/></svg>
+        <span id="refLabel">Drop reference image or <u>browse</u></span>
+        <input type="file" id="refInput" accept=".jpg,.jpeg,.png" hidden/>
+      </div>
+      <div class="ref-preview" id="refPreview" style="display:none">
+        <img id="refImg" src="" alt="Reference face"/>
+        <button class="btn btn-ghost btn-xs" id="btnClearRef">✕ Clear</button>
+      </div>
     </div>
 
     <div class="expr-compare">
@@ -442,6 +473,14 @@
         <div class="ctrl-row"><span class="ctrl-emoji">☀️</span><span class="ctrl-name">Tone</span><span class="ctrl-val" id="vTone">50%</span></div>
         <input type="range" min="0" max="100" value="50" class="slider" id="sTone"/>
       </div>
+      <div class="ctrl-group">
+        <div class="ctrl-row"><span class="ctrl-emoji">🌫️</span><span class="ctrl-name">Noise Level</span><span class="ctrl-val" id="vNoise">20%</span></div>
+        <input type="range" min="0" max="100" value="20" class="slider" id="sNoise"/>
+      </div>
+      <div class="ctrl-group">
+        <div class="ctrl-row"><span class="ctrl-emoji">🔍</span><span class="ctrl-name">Detail Enhancement</span><span class="ctrl-val" id="vDetail">40%</span></div>
+        <input type="range" min="0" max="100" value="40" class="slider" id="sDetail"/>
+      </div>
 
       <button class="btn btn-primary btn-full" style="margin-top:1rem">▶ Simulate</button>
     </div>
@@ -458,6 +497,7 @@
             <path d="M82 170 Q100 178 118 170" fill="none" stroke="#f472b6" stroke-width="1.5"/>
           </svg>
         </div>
+        <div class="age-badge">Estimated Age: <strong id="ageOriginal">28</strong> yrs</div>
       </div>
       <div class="comp-arrow-wrap">
         <div class="comp-arrow-line"></div>
@@ -465,7 +505,7 @@
         <div class="comp-arrow-line"></div>
       </div>
       <div class="comp-card comp-card-active">
-        <div class="comp-head"><span class="comp-dot" style="background:var(--amber)"></span>+30 Years</div>
+        <div class="comp-head"><span class="comp-dot" style="background:var(--amber)"></span><span id="ageOffsetLabel">+30 Years</span></div>
         <div class="comp-body">
           <svg viewBox="0 0 200 240" class="face-svg">
             <ellipse cx="100" cy="122" rx="72" ry="92" fill="rgba(245,158,11,.03)" stroke="rgba(245,158,11,.22)" stroke-width="1"/>
@@ -480,10 +520,65 @@
             <path d="M80 174 Q100 180 120 174" fill="none" stroke="#f472b6" stroke-width="1.5"/>
           </svg>
         </div>
+        <div class="age-badge age-badge-transformed">Estimated Age: <strong id="ageTransformed">58</strong> yrs</div>
       </div>
     </div>
   </div>
 
+  <div class="card method-compare-card" id="methodCompareCard" style="display:none">
+    <div class="card-head">
+      <h3>Method Comparison</h3>
+    </div>
+    <p class="card-desc" style="margin:0 0 16px">Side-by-side comparison of frequency-domain vs. AI-based aging results.</p>
+    <div class="method-compare-grid">
+      <div class="mcg-col">
+        <div class="mcg-label">Original</div>
+        <div class="mcg-body">
+          <svg viewBox="0 0 200 240" class="face-svg">
+            <ellipse cx="100" cy="120" rx="72" ry="90" fill="rgba(255,255,255,.02)" stroke="rgba(255,255,255,.12)" stroke-width="1"/>
+            <ellipse cx="82" cy="115" rx="10" ry="7" fill="none" stroke="rgba(255,255,255,.3)" stroke-width="1.2"/>
+            <ellipse cx="118" cy="115" rx="10" ry="7" fill="none" stroke="rgba(255,255,255,.3)" stroke-width="1.2"/>
+            <path d="M82 170 Q100 178 118 170" fill="none" stroke="rgba(255,255,255,.25)" stroke-width="1.5"/>
+          </svg>
+        </div>
+        <div class="age-badge">Est. Age: <strong>28</strong> yrs</div>
+      </div>
+      <div class="mcg-divider"></div>
+      <div class="mcg-col">
+        <div class="mcg-label mcg-label-freq">Frequency-Domain</div>
+        <div class="mcg-body">
+          <svg viewBox="0 0 200 240" class="face-svg">
+            <ellipse cx="100" cy="122" rx="72" ry="92" fill="rgba(139,92,246,.03)" stroke="rgba(139,92,246,.22)" stroke-width="1"/>
+            <path d="M66 100 Q72 95 80 101" fill="none" stroke="rgba(139,92,246,.4)" stroke-width=".8"/>
+            <path d="M120 100 Q128 95 134 101" fill="none" stroke="rgba(139,92,246,.4)" stroke-width=".8"/>
+            <path d="M74 140 Q100 135 126 140" fill="none" stroke="rgba(139,92,246,.2)" stroke-width=".6"/>
+            <ellipse cx="82" cy="118" rx="11" ry="8" fill="none" stroke="#8b5cf6" stroke-width="1.2"/>
+            <ellipse cx="118" cy="118" rx="11" ry="8" fill="none" stroke="#8b5cf6" stroke-width="1.2"/>
+            <path d="M80 174 Q100 180 120 174" fill="none" stroke="#8b5cf6" stroke-width="1.5"/>
+          </svg>
+        </div>
+        <div class="age-badge age-badge-freq">Est. Age: <strong id="ageFreqComp">58</strong> yrs</div>
+      </div>
+      <div class="mcg-divider"></div>
+      <div class="mcg-col">
+        <div class="mcg-label mcg-label-ai">AI (GAN)</div>
+        <div class="mcg-body">
+          <svg viewBox="0 0 200 240" class="face-svg">
+            <ellipse cx="100" cy="122" rx="70" ry="92" fill="rgba(6,182,212,.03)" stroke="rgba(6,182,212,.22)" stroke-width="1"/>
+            <path d="M64 98 Q72 92 82 100" fill="none" stroke="rgba(6,182,212,.3)" stroke-width=".8"/>
+            <path d="M118 100 Q128 92 136 98" fill="none" stroke="rgba(6,182,212,.3)" stroke-width=".8"/>
+            <path d="M70 142 Q100 136 130 142" fill="none" stroke="rgba(6,182,212,.15)" stroke-width=".6"/>
+            <path d="M58 165 Q78 160 88 170" fill="none" stroke="rgba(6,182,212,.1)" stroke-width=".5"/>
+            <path d="M112 170 Q122 160 142 165" fill="none" stroke="rgba(6,182,212,.1)" stroke-width=".5"/>
+            <ellipse cx="82" cy="118" rx="11" ry="8" fill="none" stroke="#06b6d4" stroke-width="1.2"/>
+            <ellipse cx="118" cy="118" rx="11" ry="8" fill="none" stroke="#06b6d4" stroke-width="1.2"/>
+            <path d="M80 174 Q100 182 120 174" fill="none" stroke="#06b6d4" stroke-width="1.5"/>
+          </svg>
+        </div>
+        <div class="age-badge age-badge-ai">Est. Age: <strong id="ageAiComp">56</strong> yrs</div>
+      </div>
+    </div>
+  </div>
 
 </div>
 

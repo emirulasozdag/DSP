@@ -127,7 +127,7 @@ if($('#btnResetExpr')) $('#btnResetExpr').addEventListener('click', () => {
 });
 
 /* ═══════════════════ AGING SLIDERS ═══════════════════ */
-['sAge','sContrast','sTone'].forEach(id => {
+['sAge','sContrast','sTone','sNoise','sDetail'].forEach(id => {
   const s = $(`#${id}`), v = $(`#v${id.slice(1)}`);
   if(s && v) s.addEventListener('input', () => { v.textContent = s.value+'%'; });
 });
@@ -135,6 +135,8 @@ const sTargetAge = $('#sTargetAge'), vTargetAge = $('#vTargetAge');
 if(sTargetAge && vTargetAge) sTargetAge.addEventListener('input', () => {
   const v = +sTargetAge.value;
   vTargetAge.textContent = v === 0 ? '0' : (v > 0 ? '+'+v : v);
+  updateApparentAge(v);
+  updateAgeOffsetLabel(v);
 });
 
 /* ═══════════════════ SEGMENTED CONTROLS ═══════════════════ */
@@ -143,8 +145,107 @@ $$('.seg').forEach(seg => {
     btn.addEventListener('click', () => {
       seg.querySelectorAll('.seg-btn').forEach(b => b.classList.remove('active'));
       btn.classList.add('active');
+      /* FR-3.4.9: show method comparison panel when AI mode is selected */
+      if(seg.id === 'ageMethod'){
+        const methodCompare = $('#methodCompareCard');
+        if(methodCompare) methodCompare.style.display = btn.dataset.v === 'ai' ? 'block' : 'none';
+      }
     });
   });
+});
+
+/* ═══════════════════ APPARENT AGE (FR-3.8.2) ═══════════════════ */
+const BASE_AGE = 28;
+function updateApparentAge(offset){
+  const transformed = Math.max(1, BASE_AGE + offset);
+  const el = $('#ageTransformed');
+  if(el) el.textContent = transformed;
+  const lbl = $('#ageOffsetLabel');
+  if(lbl){
+    if(offset === 0) lbl.textContent = 'Transformed';
+    else if(offset > 0) lbl.textContent = `+${offset} Years`;
+    else lbl.textContent = `${offset} Years`;
+  }
+  /* update comparison panel values */
+  const freqEl = $('#ageFreqComp');
+  const aiEl   = $('#ageAiComp');
+  if(freqEl) freqEl.textContent = transformed;
+  if(aiEl)   aiEl.textContent  = Math.max(1, BASE_AGE + Math.round(offset * 0.92));
+}
+function updateAgeOffsetLabel(offset){} /* handled inside updateApparentAge */
+
+/* ═══════════════════ WEBCAM (FR-3.8.3) ═══════════════════ */
+let webcamStream = null;
+const webcamCard = $('#webcamCard'), webcamVideo = $('#webcamVideo'), webcamCanvas = $('#webcamCanvas');
+
+function startWebcam(){
+  if(!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia){
+    alert('Webcam is not supported in this browser or context.');
+    return;
+  }
+  uploadCard.style.display = 'none';
+  previewCard.style.display = 'none';
+  webcamCard.style.display = 'block';
+  navigator.mediaDevices.getUserMedia({video:{width:{ideal:640},height:{ideal:480}},audio:false})
+    .then(stream => { webcamStream = stream; webcamVideo.srcObject = stream; })
+    .catch(err => {
+      webcamCard.style.display = 'none';
+      uploadCard.style.display = '';
+      alert('Could not access webcam: ' + err.message);
+    });
+}
+function stopWebcam(){
+  if(webcamStream){ webcamStream.getTracks().forEach(t => t.stop()); webcamStream = null; }
+  webcamCard.style.display = 'none';
+  uploadCard.style.display = '';
+}
+if($('#webcamBtn')) $('#webcamBtn').addEventListener('click', e => { e.stopPropagation(); startWebcam(); });
+if($('#btnCloseWebcam')) $('#btnCloseWebcam').addEventListener('click', stopWebcam);
+if($('#btnCancelWebcam')) $('#btnCancelWebcam').addEventListener('click', stopWebcam);
+if($('#btnCapture')) $('#btnCapture').addEventListener('click', () => {
+  if(!webcamVideo || !webcamCanvas) return;
+  webcamCanvas.width  = webcamVideo.videoWidth  || 640;
+  webcamCanvas.height = webcamVideo.videoHeight || 480;
+  webcamCanvas.getContext('2d').drawImage(webcamVideo, 0, 0);
+  const dataUrl = webcamCanvas.toDataURL('image/jpeg');
+  stopWebcam();
+  /* show in preview */
+  $('#pvImg').src = dataUrl;
+  $('#pvName').textContent = 'webcam-capture.jpg';
+  $('#pvFormat').textContent = 'JPEG';
+  $('#pvSize').textContent = '—';
+  $('#pvRes').textContent = `${webcamCanvas.width}×${webcamCanvas.height}`;
+  uploadCard.style.display = 'none';
+  previewCard.style.display = 'block';
+});
+
+/* ═══════════════════ REFERENCE IMAGE (FR-3.8.1) ═══════════════════ */
+const refDrop = $('#refDrop'), refInput = $('#refInput'), refPreview = $('#refPreview'), refImg = $('#refImg');
+if(refDrop){
+  refDrop.addEventListener('click', () => refInput.click());
+  refDrop.addEventListener('dragover', e => { e.preventDefault(); refDrop.style.borderColor = 'rgba(139,92,246,.55)'; });
+  refDrop.addEventListener('dragleave', () => { refDrop.style.borderColor = ''; });
+  refDrop.addEventListener('drop', e => {
+    e.preventDefault(); refDrop.style.borderColor = '';
+    if(e.dataTransfer.files.length) loadRefImage(e.dataTransfer.files[0]);
+  });
+}
+if(refInput) refInput.addEventListener('change', () => { if(refInput.files.length) loadRefImage(refInput.files[0]); });
+function loadRefImage(file){
+  if(!['image/jpeg','image/png'].includes(file.type)){ alert('Only JPG/PNG accepted.'); return; }
+  const reader = new FileReader();
+  reader.onload = e => {
+    refImg.src = e.target.result;
+    refDrop.style.display = 'none';
+    refPreview.style.display = 'flex';
+  };
+  reader.readAsDataURL(file);
+}
+if($('#btnClearRef')) $('#btnClearRef').addEventListener('click', () => {
+  refImg.src = '';
+  refInput.value = '';
+  refPreview.style.display = 'none';
+  refDrop.style.display = 'flex';
 });
 
 /* ═══════════════════ RADIO CARDS ═══════════════════ */
