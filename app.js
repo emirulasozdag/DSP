@@ -131,6 +131,11 @@ if($('#btnResetExpr')) $('#btnResetExpr').addEventListener('click', () => {
   const s = $(`#${id}`), v = $(`#v${id.slice(1)}`);
   if(s && v) s.addEventListener('input', () => { v.textContent = s.value+'%'; });
 });
+const sTargetAge = $('#sTargetAge'), vTargetAge = $('#vTargetAge');
+if(sTargetAge && vTargetAge) sTargetAge.addEventListener('input', () => {
+  const v = +sTargetAge.value;
+  vTargetAge.textContent = v === 0 ? '0' : (v > 0 ? '+'+v : v);
+});
 
 /* ═══════════════════ SEGMENTED CONTROLS ═══════════════════ */
 $$('.seg').forEach(seg => {
