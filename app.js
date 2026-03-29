@@ -394,8 +394,19 @@ requestAnimationFrame(initReveal);
 
 /* ═══════════════════ SLIDER TRACK FILL ═══════════════════ */
 function updateSliderFill(s){
-  const pct = ((s.value - s.min) / (s.max - s.min)) * 100;
-  s.style.background = `linear-gradient(90deg, rgba(139,92,246,.4) ${pct}%, var(--bg2) ${pct}%)`;
+  if(s.classList.contains('slider-bipolar')){
+    const min = +s.min, max = +s.max, val = +s.value;
+    const center = ((0 - min) / (max - min)) * 100;
+    const pos    = ((val  - min) / (max - min)) * 100;
+    const left   = Math.min(center, pos);
+    const right  = Math.max(center, pos);
+    const color  = val >= 0 ? 'rgba(139,92,246,.5)' : 'rgba(6,182,212,.45)';
+    s.style.background =
+      `linear-gradient(90deg, var(--bg2) ${left}%, ${color} ${left}%, ${color} ${right}%, var(--bg2) ${right}%)`;
+  } else {
+    const pct = ((s.value - s.min) / (s.max - s.min)) * 100;
+    s.style.background = `linear-gradient(90deg, rgba(139,92,246,.4) ${pct}%, var(--bg2) ${pct}%)`;
+  }
 }
 $$('.slider').forEach(s => {
   updateSliderFill(s);
