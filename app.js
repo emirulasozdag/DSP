@@ -184,3 +184,67 @@ function download(name, content, type){
   a.click();
   URL.revokeObjectURL(a.href);
 }
+
+/* ═══════════════════ BUTTON RIPPLE ═══════════════════ */
+$$('.btn-primary, .btn-outline').forEach(btn => {
+  btn.addEventListener('click', function(e){
+    const ripple = document.createElement('span');
+    const rect = this.getBoundingClientRect();
+    const size = Math.max(rect.width, rect.height);
+    ripple.style.cssText = `
+      position:absolute;border-radius:50%;pointer-events:none;
+      width:${size}px;height:${size}px;
+      left:${e.clientX - rect.left - size/2}px;
+      top:${e.clientY - rect.top - size/2}px;
+      background:rgba(255,255,255,.12);
+      transform:scale(0);animation:rippleOut .6s ease-out forwards;
+    `;
+    this.appendChild(ripple);
+    setTimeout(() => ripple.remove(), 650);
+  });
+});
+
+/* inject ripple keyframes */
+const rippleStyle = document.createElement('style');
+rippleStyle.textContent = '@keyframes rippleOut{to{transform:scale(2.5);opacity:0}}';
+document.head.appendChild(rippleStyle);
+
+/* ═══════════════════ SMOOTH CARD REVEAL ═══════════════════ */
+const revealObserver = new IntersectionObserver((entries) => {
+  entries.forEach(entry => {
+    if(entry.isIntersecting){
+      entry.target.style.opacity = '1';
+      entry.target.style.transform = 'translateY(0)';
+      revealObserver.unobserve(entry.target);
+    }
+  });
+}, {threshold: 0.1, rootMargin: '0px 0px -40px 0px'});
+
+function initReveal(){
+  document.querySelectorAll('.page.active .card, .page.active .energy-grid, .page.active .hint-cards').forEach((el, i) => {
+    el.style.opacity = '0';
+    el.style.transform = 'translateY(18px)';
+    el.style.transition = `opacity .5s ${i * .06}s var(--ease), transform .5s ${i * .06}s var(--ease)`;
+    revealObserver.observe(el);
+  });
+}
+
+/* re-init on page nav */
+const origNav = nav;
+nav = function(page){
+  origNav(page);
+  requestAnimationFrame(() => requestAnimationFrame(initReveal));
+};
+
+/* init on load */
+requestAnimationFrame(initReveal);
+
+/* ═══════════════════ SLIDER TRACK FILL ═══════════════════ */
+function updateSliderFill(s){
+  const pct = ((s.value - s.min) / (s.max - s.min)) * 100;
+  s.style.background = `linear-gradient(90deg, rgba(139,92,246,.4) ${pct}%, var(--bg2) ${pct}%)`;
+}
+$$('.slider').forEach(s => {
+  updateSliderFill(s);
+  s.addEventListener('input', () => updateSliderFill(s));
+});

@@ -608,9 +608,10 @@
     <div class="qm-grid">
       <div class="qm-card">
         <div class="qm-ring qm-ring-pink">
-          <svg viewBox="0 0 80 80">
-            <circle cx="40" cy="40" r="34" fill="none" stroke="rgba(255,255,255,.06)" stroke-width="5"/>
-            <circle cx="40" cy="40" r="34" fill="none" stroke="#f472b6" stroke-width="5" stroke-dasharray="71 143" stroke-dashoffset="0" stroke-linecap="round" transform="rotate(-90 40 40)"/>
+          <svg viewBox="0 0 100 100">
+            <circle cx="50" cy="50" r="42" fill="none" stroke="rgba(255,255,255,.05)" stroke-width="6"/>
+            <circle cx="50" cy="50" r="42" fill="none" stroke="url(#gMSE)" stroke-width="6" stroke-dasharray="92 172" stroke-dashoffset="0" stroke-linecap="round" transform="rotate(-90 50 50)"/>
+            <defs><linearGradient id="gMSE" x1="0" y1="0" x2="1" y2="1"><stop offset="0%" stop-color="#f472b6"/><stop offset="100%" stop-color="#ec4899"/></linearGradient></defs>
           </svg>
           <span>35%</span>
         </div>
@@ -619,9 +620,10 @@
       </div>
       <div class="qm-card">
         <div class="qm-ring qm-ring-cyan">
-          <svg viewBox="0 0 80 80">
-            <circle cx="40" cy="40" r="34" fill="none" stroke="rgba(255,255,255,.06)" stroke-width="5"/>
-            <circle cx="40" cy="40" r="34" fill="none" stroke="#06b6d4" stroke-width="5" stroke-dasharray="145 69" stroke-dashoffset="0" stroke-linecap="round" transform="rotate(-90 40 40)"/>
+          <svg viewBox="0 0 100 100">
+            <circle cx="50" cy="50" r="42" fill="none" stroke="rgba(255,255,255,.05)" stroke-width="6"/>
+            <circle cx="50" cy="50" r="42" fill="none" stroke="url(#gPSNR)" stroke-width="6" stroke-dasharray="179 85" stroke-dashoffset="0" stroke-linecap="round" transform="rotate(-90 50 50)"/>
+            <defs><linearGradient id="gPSNR" x1="0" y1="0" x2="1" y2="1"><stop offset="0%" stop-color="#06b6d4"/><stop offset="100%" stop-color="#22d3ee"/></linearGradient></defs>
           </svg>
           <span>68%</span>
         </div>
@@ -630,9 +632,10 @@
       </div>
       <div class="qm-card">
         <div class="qm-ring qm-ring-green">
-          <svg viewBox="0 0 80 80">
-            <circle cx="40" cy="40" r="34" fill="none" stroke="rgba(255,255,255,.06)" stroke-width="5"/>
-            <circle cx="40" cy="40" r="34" fill="none" stroke="#10b981" stroke-width="5" stroke-dasharray="182 32" stroke-dashoffset="0" stroke-linecap="round" transform="rotate(-90 40 40)"/>
+          <svg viewBox="0 0 100 100">
+            <circle cx="50" cy="50" r="42" fill="none" stroke="rgba(255,255,255,.05)" stroke-width="6"/>
+            <circle cx="50" cy="50" r="42" fill="none" stroke="url(#gSSIM)" stroke-width="6" stroke-dasharray="225 39" stroke-dashoffset="0" stroke-linecap="round" transform="rotate(-90 50 50)"/>
+            <defs><linearGradient id="gSSIM" x1="0" y1="0" x2="1" y2="1"><stop offset="0%" stop-color="#10b981"/><stop offset="100%" stop-color="#34d399"/></linearGradient></defs>
           </svg>
           <span>85%</span>
         </div>
@@ -673,18 +676,24 @@
   </div>
   <div class="grid-2">
     <div class="card">
-      <div class="card-head"><h3>Performance</h3></div>
+      <div class="card-head"><h3>Performance</h3><span class="tag tag-done">Active</span></div>
       <p class="card-desc">NFR-4.1: All operations complete within 5 seconds.</p>
       <div class="ctrl-group" style="margin-top:.75rem">
         <div class="ctrl-row"><span class="ctrl-emoji">🖥</span><span class="ctrl-name">Standard Resolution</span><span class="ctrl-val">256×256</span></div>
       </div>
+      <div class="ctrl-group">
+        <div class="ctrl-row"><span class="ctrl-emoji">⚡</span><span class="ctrl-name">Processing Engine</span><span class="ctrl-val">GPU</span></div>
+      </div>
+      <div class="ctrl-group">
+        <div class="ctrl-row"><span class="ctrl-emoji">📁</span><span class="ctrl-name">Max File Size</span><span class="ctrl-val">10 MB</span></div>
+      </div>
     </div>
     <div class="card">
-      <div class="card-head"><h3>AI Extensions</h3><span class="tag">Optional</span></div>
+      <div class="card-head"><h3>AI Extensions</h3><span class="tag tag-ai">Optional</span></div>
       <p class="card-desc">FR-3.8.1–3.8.3: AI-powered features when available.</p>
-      <label class="sw" style="margin-top:.5rem"><input type="checkbox"/><span class="sw-track"></span><span class="sw-label">Expression transfer from reference</span></label>
-      <label class="sw"><input type="checkbox"/><span class="sw-track"></span><span class="sw-label">Apparent age estimation</span></label>
-      <label class="sw"><input type="checkbox"/><span class="sw-track"></span><span class="sw-label">Webcam real-time mode</span></label>
+      <label class="sw" style="margin-top:.75rem"><input type="checkbox"/><span class="sw-track"></span><span class="sw-label">Expression transfer from reference <span class="fr-tag">FR-3.8.1</span></span></label>
+      <label class="sw"><input type="checkbox"/><span class="sw-track"></span><span class="sw-label">Apparent age estimation <span class="fr-tag">FR-3.8.2</span></span></label>
+      <label class="sw"><input type="checkbox"/><span class="sw-track"></span><span class="sw-label">Webcam real-time mode <span class="fr-tag">FR-3.8.3</span></span></label>
     </div>
   </div>
 </div>
