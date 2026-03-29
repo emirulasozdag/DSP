@@ -1,0 +1,160 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Upload — DSP Face Lab</title>
+    <link rel="stylesheet" href="../static/css/style.css">
+</head>
+
+<body>
+    <div class="scanlines"></div>
+
+    <!-- ========== NAVBAR ========== -->
+    <nav class="navbar">
+        <div class="container">
+            <a href="index.html" class="nav-logo">
+                <div class="logo-icon">FL</div>
+                <span class="logo-text">DSP FACE LAB</span>
+            </a>
+            <ul class="nav-links">
+                <li><a href="index.html"><span class="nav-icon">⌂</span> Home</a></li>
+                <li><a href="upload.html" class="active"><span class="nav-icon">⬆</span> Upload</a></li>
+                <li><a href="transform.html"><span class="nav-icon">✦</span> Transform</a></li>
+                <li><a href="analysis.html"><span class="nav-icon">≈</span> Analysis</a></li>
+                <li><a href="results.html"><span class="nav-icon">▦</span> Results</a></li>
+            </ul>
+            <button class="nav-toggle" aria-label="Toggle menu">
+                <span></span><span></span><span></span>
+            </button>
+        </div>
+    </nav>
+
+    <!-- ========== PAGE HEADER ========== -->
+    <div class="container">
+        <div class="page-header">
+            <h1>Upload Facial Image</h1>
+            <p>Upload a front-facing face photo to begin processing</p>
+        </div>
+
+        <!-- Steps bar -->
+        <div class="steps-bar">
+            <div class="step active">
+                <span class="step-num">1</span>
+                <span class="step-label">Upload</span>
+            </div>
+            <div class="step-line"></div>
+            <div class="step">
+                <span class="step-num">2</span>
+                <span class="step-label">Transform</span>
+            </div>
+            <div class="step-line"></div>
+            <div class="step">
+                <span class="step-num">3</span>
+                <span class="step-label">Analyze</span>
+            </div>
+            <div class="step-line"></div>
+            <div class="step">
+                <span class="step-num">4</span>
+                <span class="step-label">Results</span>
+            </div>
+        </div>
+
+        <!-- ========== UPLOAD ZONE ========== -->
+        <div class="upload-container">
+            <div class="upload-zone glass-card">
+                <input type="file" accept="image/jpeg,image/png" style="display: none;">
+                <div class="upload-icon">📤</div>
+                <h3>Drag &amp; drop your image here</h3>
+                <p>or click to browse files</p>
+                <div class="format-badges">
+                    <span class="format-badge">JPG</span>
+                    <span class="format-badge">PNG</span>
+                </div>
+            </div>
+
+            <!-- Upload preview (hidden by default) -->
+            <div class="upload-preview hidden">
+                <div class="glass-card preview-card">
+                    <div class="preview-image">
+                        <img src="" alt="Preview" class="hidden">
+                        <span class="placeholder-face">👤</span>
+                    </div>
+                    <div class="preview-info">
+                        <h4 class="file-name">filename.jpg</h4>
+                        <div class="preview-meta">
+                            <span class="file-resolution">Resolution: — × —</span>
+                            <span class="file-size">Size: — KB</span>
+                        </div>
+                        <div class="validation-status valid">
+                            ✓ Valid format
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Requirements card -->
+            <div class="glass-card mt-3" style="padding: 20px;">
+                <h4 style="font-size: 0.85rem; font-weight: 600; color: var(--neon-amber); margin-bottom: 12px;">📋
+                    Image Requirements</h4>
+                <ul style="list-style: none; display: flex; flex-direction: column; gap: 8px;">
+                    <li
+                        style="font-size: 0.82rem; color: var(--text-secondary); display: flex; align-items: center; gap: 8px;">
+                        <span style="color: var(--neon-green);">✓</span> Front-facing facial image
+                    </li>
+                    <li
+                        style="font-size: 0.82rem; color: var(--text-secondary); display: flex; align-items: center; gap: 8px;">
+                        <span style="color: var(--neon-green);">✓</span> JPG or PNG format
+                    </li>
+                    <li
+                        style="font-size: 0.82rem; color: var(--text-secondary); display: flex; align-items: center; gap: 8px;">
+                        <span style="color: var(--neon-green);">✓</span> Clear, well-lit photograph
+                    </li>
+                    <li
+                        style="font-size: 0.82rem; color: var(--text-secondary); display: flex; align-items: center; gap: 8px;">
+                        <span style="color: var(--neon-green);">✓</span> One face visible in the image
+                    </li>
+                </ul>
+            </div>
+
+            <!-- Action -->
+            <div class="action-bar" style="justify-content: flex-end;">
+                <a href="transform.html" class="btn btn-primary btn-proceed disabled">
+                    Proceed to Transform →
+                </a>
+            </div>
+        </div>
+    </div>
+
+    <!-- ========== FOOTER ========== -->
+    <footer class="footer">
+        <div class="container">
+            <div class="footer-content">
+                <div class="footer-brand">
+                    <div class="footer-logo">DSP FACE LAB</div>
+                    <p>Department of Software Engineering<br>Ankara Science University<br>CENG 384 — Intro. to Signal
+                        Processing</p>
+                </div>
+                <div class="footer-team">
+                    <h4>Team Members</h4>
+                    <ul>
+                        <li>Nisa Nur Aklan – 220204012</li>
+                        <li>Ceyda Yıldız – 220204011</li>
+                        <li>Emir Ulaş Özdağ – 220204041</li>
+                        <li>Nisanur İlhan – 220204053</li>
+                        <li>Berke Akçay – 220204058</li>
+                        <li>Ahmet Talha Akyol – 230201006</li>
+                    </ul>
+                </div>
+            </div>
+            <div class="footer-bottom">
+                © 2026 DSP Face Lab · CENG 384 Project · Ankara Science University
+            </div>
+        </div>
+    </footer>
+
+    <script src="../static/js/main.js"></script>
+</body>
+
+</html>

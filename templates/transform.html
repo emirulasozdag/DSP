@@ -1,0 +1,258 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Transform — DSP Face Lab</title>
+    <link rel="stylesheet" href="../static/css/style.css">
+</head>
+
+<body>
+    <div class="scanlines"></div>
+
+    <!-- ========== NAVBAR ========== -->
+    <nav class="navbar">
+        <div class="container">
+            <a href="index.html" class="nav-logo">
+                <div class="logo-icon">FL</div>
+                <span class="logo-text">DSP FACE LAB</span>
+            </a>
+            <ul class="nav-links">
+                <li><a href="index.html"><span class="nav-icon">⌂</span> Home</a></li>
+                <li><a href="upload.html"><span class="nav-icon">⬆</span> Upload</a></li>
+                <li><a href="transform.html" class="active"><span class="nav-icon">✦</span> Transform</a></li>
+                <li><a href="analysis.html"><span class="nav-icon">≈</span> Analysis</a></li>
+                <li><a href="results.html"><span class="nav-icon">▦</span> Results</a></li>
+            </ul>
+            <button class="nav-toggle" aria-label="Toggle menu">
+                <span></span><span></span><span></span>
+            </button>
+        </div>
+    </nav>
+
+    <!-- ========== PAGE HEADER ========== -->
+    <div class="container">
+        <div class="page-header">
+            <h1>Facial Transformation</h1>
+            <p>Adjust expression and aging parameters to transform the facial image</p>
+        </div>
+
+        <!-- Steps bar -->
+        <div class="steps-bar">
+            <div class="step completed">
+                <span class="step-num">✓</span>
+                <span class="step-label">Upload</span>
+            </div>
+            <div class="step-line done"></div>
+            <div class="step active">
+                <span class="step-num">2</span>
+                <span class="step-label">Transform</span>
+            </div>
+            <div class="step-line"></div>
+            <div class="step">
+                <span class="step-num">3</span>
+                <span class="step-label">Analyze</span>
+            </div>
+            <div class="step-line"></div>
+            <div class="step">
+                <span class="step-num">4</span>
+                <span class="step-label">Results</span>
+            </div>
+        </div>
+
+        <!-- ========== 3-PANEL LAYOUT ========== -->
+        <div class="transform-layout">
+
+            <!-- LEFT: Original Image -->
+            <div>
+                <div class="panel-label">Original Image</div>
+                <div class="image-panel glass-card" style="padding: 0;">
+                    <span class="placeholder-face-lg">👤</span>
+                    <!-- Decorative landmark dots -->
+                    <div class="landmark-dots" id="landmarkOverlay">
+                        <!-- Eyes -->
+                        <span class="landmark-dot" style="top: 36%; left: 38%;"></span>
+                        <span class="landmark-dot" style="top: 36%; left: 62%;"></span>
+                        <span class="landmark-dot" style="top: 35%; left: 35%;"></span>
+                        <span class="landmark-dot" style="top: 35%; left: 65%;"></span>
+                        <span class="landmark-dot" style="top: 37%; left: 41%;"></span>
+                        <span class="landmark-dot" style="top: 37%; left: 59%;"></span>
+                        <!-- Eyebrows -->
+                        <span class="landmark-dot" style="top: 30%; left: 34%;"></span>
+                        <span class="landmark-dot" style="top: 29%; left: 38%;"></span>
+                        <span class="landmark-dot" style="top: 29%; left: 42%;"></span>
+                        <span class="landmark-dot" style="top: 30%; left: 66%;"></span>
+                        <span class="landmark-dot" style="top: 29%; left: 62%;"></span>
+                        <span class="landmark-dot" style="top: 29%; left: 58%;"></span>
+                        <!-- Nose -->
+                        <span class="landmark-dot" style="top: 48%; left: 50%;"></span>
+                        <span class="landmark-dot" style="top: 46%; left: 47%;"></span>
+                        <span class="landmark-dot" style="top: 46%; left: 53%;"></span>
+                        <!-- Mouth -->
+                        <span class="landmark-dot" style="top: 58%; left: 44%;"></span>
+                        <span class="landmark-dot" style="top: 57%; left: 50%;"></span>
+                        <span class="landmark-dot" style="top: 58%; left: 56%;"></span>
+                        <span class="landmark-dot" style="top: 61%; left: 50%;"></span>
+                        <span class="landmark-dot" style="top: 60%; left: 46%;"></span>
+                        <span class="landmark-dot" style="top: 60%; left: 54%;"></span>
+                        <!-- Jaw -->
+                        <span class="landmark-dot" style="top: 68%; left: 38%;"></span>
+                        <span class="landmark-dot" style="top: 72%; left: 44%;"></span>
+                        <span class="landmark-dot" style="top: 74%; left: 50%;"></span>
+                        <span class="landmark-dot" style="top: 72%; left: 56%;"></span>
+                        <span class="landmark-dot" style="top: 68%; left: 62%;"></span>
+                    </div>
+                    <div class="panel-overlay">
+                        <span>468 landmarks detected</span>
+                        <span class="text-green" style="font-size: 0.75rem;">● Ready</span>
+                    </div>
+                </div>
+            </div>
+
+            <!-- CENTER: Controls -->
+            <div class="controls-panel">
+
+                <!-- Expression Manipulation -->
+                <div class="glass-card controls-section">
+                    <h3><span class="section-icon">😊</span> Expression Manipulation</h3>
+
+                    <div class="slider-group">
+                        <div class="slider-header">
+                            <span class="slider-label">Smile Enhancement</span>
+                            <span class="slider-value">0%</span>
+                        </div>
+                        <input type="range" min="0" max="100" value="0">
+                    </div>
+
+                    <div class="slider-group">
+                        <div class="slider-header">
+                            <span class="slider-label">Eyebrow Raising</span>
+                            <span class="slider-value">0%</span>
+                        </div>
+                        <input type="range" min="0" max="100" value="0">
+                    </div>
+
+                    <div class="slider-group">
+                        <div class="slider-header">
+                            <span class="slider-label">Lip Widening</span>
+                            <span class="slider-value">0%</span>
+                        </div>
+                        <input type="range" min="0" max="100" value="0">
+                    </div>
+
+                    <div class="slider-group">
+                        <div class="slider-header">
+                            <span class="slider-label">Face Slimming</span>
+                            <span class="slider-value">0%</span>
+                        </div>
+                        <input type="range" min="0" max="100" value="0" class="magenta">
+                    </div>
+                </div>
+
+                <!-- Aging / De-Aging -->
+                <div class="glass-card controls-section">
+                    <h3><span class="section-icon">⏳</span> Aging / De-Aging</h3>
+
+                    <div class="slider-group">
+                        <div class="slider-header">
+                            <span class="slider-label">Age Shift</span>
+                            <span class="slider-value">0 yrs</span>
+                        </div>
+                        <input type="range" min="-50" max="50" value="0" data-unit="years" class="purple">
+                    </div>
+
+                    <div class="slider-group">
+                        <div class="slider-header">
+                            <span class="slider-label">Wrinkle Intensity</span>
+                            <span class="slider-value">0%</span>
+                        </div>
+                        <input type="range" min="0" max="100" value="0" class="magenta">
+                    </div>
+
+                    <div class="slider-group">
+                        <div class="slider-header">
+                            <span class="slider-label">Skin Smoothing</span>
+                            <span class="slider-value">0%</span>
+                        </div>
+                        <input type="range" min="0" max="100" value="0">
+                    </div>
+                </div>
+
+                <!-- Options -->
+                <div class="glass-card controls-section">
+                    <h3><span class="section-icon">⚙</span> Options</h3>
+                    <div class="toggle-row">
+                        <span class="toggle-label">Show Landmarks</span>
+                        <label class="toggle-switch">
+                            <input type="checkbox" data-target="#landmarkOverlay">
+                            <span class="toggle-track"></span>
+                            <span class="toggle-knob"></span>
+                        </label>
+                    </div>
+                    <div class="toggle-row">
+                        <span class="toggle-label">Side-by-Side Mode</span>
+                        <label class="toggle-switch">
+                            <input type="checkbox">
+                            <span class="toggle-track"></span>
+                            <span class="toggle-knob"></span>
+                        </label>
+                    </div>
+                </div>
+
+            </div>
+
+            <!-- RIGHT: Transformed Image -->
+            <div>
+                <div class="panel-label" style="color: var(--neon-magenta);">Transformed Preview</div>
+                <div class="image-panel glass-card" style="padding: 0; border-color: rgba(255, 0, 255, 0.2);">
+                    <span class="placeholder-face-lg">🎭</span>
+                    <div class="panel-overlay">
+                        <span>Awaiting transformation...</span>
+                    </div>
+                </div>
+            </div>
+
+        </div>
+
+        <!-- Action bar -->
+        <div class="action-bar">
+            <button class="btn btn-secondary" onclick="resetAll()">↺ Reset All</button>
+            <a href="analysis.html" class="btn btn-primary">
+                Apply &amp; Analyze →
+            </a>
+        </div>
+
+    </div>
+
+    <!-- ========== FOOTER ========== -->
+    <footer class="footer">
+        <div class="container">
+            <div class="footer-content">
+                <div class="footer-brand">
+                    <div class="footer-logo">DSP FACE LAB</div>
+                    <p>Department of Software Engineering<br>Ankara Science University<br>CENG 384 — Intro. to Signal
+                        Processing</p>
+                </div>
+                <div class="footer-team">
+                    <h4>Team Members</h4>
+                    <ul>
+                        <li>Nisa Nur Aklan – 220204012</li>
+                        <li>Ceyda Yıldız – 220204011</li>
+                        <li>Emir Ulaş Özdağ – 220204041</li>
+                        <li>Nisanur İlhan – 220204053</li>
+                        <li>Berke Akçay – 220204058</li>
+                        <li>Ahmet Talha Akyol – 230201006</li>
+                    </ul>
+                </div>
+            </div>
+            <div class="footer-bottom">
+                © 2026 DSP Face Lab · CENG 384 Project · Ankara Science University
+            </div>
+        </div>
+    </footer>
+
+    <script src="../static/js/main.js"></script>
+</body>
+
+</html>

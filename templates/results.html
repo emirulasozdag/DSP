@@ -1,0 +1,258 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Results — DSP Face Lab</title>
+    <link rel="stylesheet" href="../static/css/style.css">
+</head>
+
+<body>
+    <div class="scanlines"></div>
+
+    <!-- ========== NAVBAR ========== -->
+    <nav class="navbar">
+        <div class="container">
+            <a href="index.html" class="nav-logo">
+                <div class="logo-icon">FL</div>
+                <span class="logo-text">DSP FACE LAB</span>
+            </a>
+            <ul class="nav-links">
+                <li><a href="index.html"><span class="nav-icon">⌂</span> Home</a></li>
+                <li><a href="upload.html"><span class="nav-icon">⬆</span> Upload</a></li>
+                <li><a href="transform.html"><span class="nav-icon">✦</span> Transform</a></li>
+                <li><a href="analysis.html"><span class="nav-icon">≈</span> Analysis</a></li>
+                <li><a href="results.html" class="active"><span class="nav-icon">▦</span> Results</a></li>
+            </ul>
+            <button class="nav-toggle" aria-label="Toggle menu">
+                <span></span><span></span><span></span>
+            </button>
+        </div>
+    </nav>
+
+    <!-- ========== PAGE HEADER ========== -->
+    <div class="container">
+        <div class="page-header">
+            <h1>Evaluation Results</h1>
+            <p>Quantitative quality metrics and final comparison</p>
+        </div>
+
+        <!-- Steps bar -->
+        <div class="steps-bar">
+            <div class="step completed">
+                <span class="step-num">✓</span>
+                <span class="step-label">Upload</span>
+            </div>
+            <div class="step-line done"></div>
+            <div class="step completed">
+                <span class="step-num">✓</span>
+                <span class="step-label">Transform</span>
+            </div>
+            <div class="step-line done"></div>
+            <div class="step completed">
+                <span class="step-num">✓</span>
+                <span class="step-label">Analyze</span>
+            </div>
+            <div class="step-line done"></div>
+            <div class="step active">
+                <span class="step-num">4</span>
+                <span class="step-label">Results</span>
+            </div>
+        </div>
+
+        <!-- ========== METRIC CARDS ========== -->
+        <div class="metrics-grid">
+            <!-- MSE -->
+            <div class="glass-card metric-card">
+                <div class="metric-icon">📐</div>
+                <div class="metric-value">12.47</div>
+                <div class="metric-name">MSE</div>
+                <div class="metric-unit">Mean Squared Error</div>
+            </div>
+            <!-- PSNR -->
+            <div class="glass-card metric-card">
+                <div class="metric-icon">📡</div>
+                <div class="metric-value">37.2</div>
+                <div class="metric-name">PSNR</div>
+                <div class="metric-unit">Peak Signal-to-Noise Ratio (dB)</div>
+            </div>
+            <!-- SSIM -->
+            <div class="glass-card metric-card">
+                <div class="metric-icon">🔗</div>
+                <div class="metric-value">0.965</div>
+                <div class="metric-name">SSIM</div>
+                <div class="metric-unit">Structural Similarity Index</div>
+            </div>
+        </div>
+
+        <!-- ========== SIDE-BY-SIDE FINAL COMPARISON ========== -->
+        <div class="comparison-grid">
+            <div class="comparison-card">
+                <div class="comparison-label">Original</div>
+                <div class="comparison-image glass-card" style="padding: 0;">
+                    <span class="placeholder-face-lg">👤</span>
+                </div>
+            </div>
+            <div class="comparison-card">
+                <div class="comparison-label">Final Result</div>
+                <div class="comparison-image glass-card" style="padding: 0; border-color: rgba(0, 255, 136, 0.2);">
+                    <span class="placeholder-face-lg">🎭</span>
+                </div>
+            </div>
+        </div>
+
+        <!-- ========== DETAILED TABLE ========== -->
+        <div class="glass-card results-table-wrap">
+            <h3 style="font-size: 0.9rem; font-weight: 700; color: #fff; margin-bottom: 16px;">Detailed Metrics Report
+            </h3>
+            <table class="results-table">
+                <thead>
+                    <tr>
+                        <th>Metric</th>
+                        <th>Value</th>
+                        <th>Unit</th>
+                        <th>Interpretation</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <tr>
+                        <td><strong style="color: var(--neon-cyan);">MSE</strong></td>
+                        <td>12.47</td>
+                        <td>px²</td>
+                        <td>Low error — high fidelity transformation</td>
+                    </tr>
+                    <tr>
+                        <td><strong style="color: var(--neon-magenta);">PSNR</strong></td>
+                        <td>37.20</td>
+                        <td>dB</td>
+                        <td>Excellent image quality (>30 dB = good)</td>
+                    </tr>
+                    <tr>
+                        <td><strong style="color: var(--neon-green);">SSIM</strong></td>
+                        <td>0.965</td>
+                        <td>—</td>
+                        <td>Strong structural similarity (1.0 = identical)</td>
+                    </tr>
+                    <tr>
+                        <td><strong style="color: var(--neon-purple);">Total Spectral Energy</strong></td>
+                        <td>4.2 × 10⁶</td>
+                        <td>—</td>
+                        <td>Energy distribution within normal range</td>
+                    </tr>
+                    <tr>
+                        <td><strong style="color: var(--neon-amber);">HF/LF Ratio</strong></td>
+                        <td>0.75</td>
+                        <td>—</td>
+                        <td>Balanced high/low frequency components</td>
+                    </tr>
+                </tbody>
+            </table>
+        </div>
+
+        <!-- ========== TRANSFORMATION SUMMARY ========== -->
+        <div class="glass-card" style="padding: 24px; margin-bottom: 30px;">
+            <h3 style="font-size: 0.9rem; font-weight: 700; color: #fff; margin-bottom: 16px;">Applied Transformations
+            </h3>
+            <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 12px;">
+                <div
+                    style="display: flex; align-items: center; gap: 10px; padding: 10px 14px; background: rgba(0, 240, 255, 0.05); border-radius: 8px; border: 1px solid rgba(0, 240, 255, 0.1);">
+                    <span style="font-size: 1.2rem;">😊</span>
+                    <div>
+                        <div style="font-size: 0.82rem; font-weight: 600; color: var(--text-primary);">Smile Enhancement
+                        </div>
+                        <div style="font-size: 0.75rem; color: var(--neon-cyan); font-family: 'Orbitron', sans-serif;">
+                            65%</div>
+                    </div>
+                </div>
+                <div
+                    style="display: flex; align-items: center; gap: 10px; padding: 10px 14px; background: rgba(123, 47, 255, 0.05); border-radius: 8px; border: 1px solid rgba(123, 47, 255, 0.1);">
+                    <span style="font-size: 1.2rem;">🤨</span>
+                    <div>
+                        <div style="font-size: 0.82rem; font-weight: 600; color: var(--text-primary);">Eyebrow Raising
+                        </div>
+                        <div
+                            style="font-size: 0.75rem; color: var(--neon-purple); font-family: 'Orbitron', sans-serif;">
+                            30%</div>
+                    </div>
+                </div>
+                <div
+                    style="display: flex; align-items: center; gap: 10px; padding: 10px 14px; background: rgba(255, 0, 255, 0.05); border-radius: 8px; border: 1px solid rgba(255, 0, 255, 0.1);">
+                    <span style="font-size: 1.2rem;">👄</span>
+                    <div>
+                        <div style="font-size: 0.82rem; font-weight: 600; color: var(--text-primary);">Lip Widening
+                        </div>
+                        <div
+                            style="font-size: 0.75rem; color: var(--neon-magenta); font-family: 'Orbitron', sans-serif;">
+                            20%</div>
+                    </div>
+                </div>
+                <div
+                    style="display: flex; align-items: center; gap: 10px; padding: 10px 14px; background: rgba(255, 170, 0, 0.05); border-radius: 8px; border: 1px solid rgba(255, 170, 0, 0.1);">
+                    <span style="font-size: 1.2rem;">⏳</span>
+                    <div>
+                        <div style="font-size: 0.82rem; font-weight: 600; color: var(--text-primary);">Age Shift</div>
+                        <div style="font-size: 0.75rem; color: var(--neon-amber); font-family: 'Orbitron', sans-serif;">
+                            +15 yrs</div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- ========== EXPORT BUTTONS ========== -->
+        <div class="export-row">
+            <button class="btn btn-primary">
+                💾 Save Image
+            </button>
+            <button class="btn btn-success">
+                📄 Export CSV
+            </button>
+            <button class="btn btn-neon">
+                📋 Export PDF
+            </button>
+            <button class="btn btn-amber">
+                📍 Export Landmarks
+            </button>
+        </div>
+
+        <!-- Action bar -->
+        <div class="action-bar" style="justify-content: space-between;">
+            <a href="analysis.html" class="btn btn-secondary">← Back to Analysis</a>
+            <a href="upload.html" class="btn btn-primary">
+                ↺ Start Over
+            </a>
+        </div>
+
+    </div>
+
+    <!-- ========== FOOTER ========== -->
+    <footer class="footer">
+        <div class="container">
+            <div class="footer-content">
+                <div class="footer-brand">
+                    <div class="footer-logo">DSP FACE LAB</div>
+                    <p>Department of Software Engineering<br>Ankara Science University<br>CENG 384 — Intro. to Signal
+                        Processing</p>
+                </div>
+                <div class="footer-team">
+                    <h4>Team Members</h4>
+                    <ul>
+                        <li>Nisa Nur Aklan – 220204012</li>
+                        <li>Ceyda Yıldız – 220204011</li>
+                        <li>Emir Ulaş Özdağ – 220204041</li>
+                        <li>Nisanur İlhan – 220204053</li>
+                        <li>Berke Akçay – 220204058</li>
+                        <li>Ahmet Talha Akyol – 230201006</li>
+                    </ul>
+                </div>
+            </div>
+            <div class="footer-bottom">
+                © 2026 DSP Face Lab · CENG 384 Project · Ankara Science University
+            </div>
+        </div>
+    </footer>
+
+    <script src="../static/js/main.js"></script>
+</body>
+
+</html>

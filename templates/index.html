@@ -1,0 +1,192 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>DSP Face Lab — Facial Image Warping, Aging & Expression Transformation</title>
+    <link rel="stylesheet" href="../static/css/style.css">
+</head>
+
+<body>
+    <!-- Scanline overlay -->
+    <div class="scanlines"></div>
+
+    <!-- ========== NAVBAR ========== -->
+    <nav class="navbar">
+        <div class="container">
+            <a href="index.html" class="nav-logo">
+                <div class="logo-icon">FL</div>
+                <span class="logo-text">DSP FACE LAB</span>
+            </a>
+            <ul class="nav-links">
+                <li><a href="index.html" class="active"><span class="nav-icon">⌂</span> Home</a></li>
+                <li><a href="upload.html"><span class="nav-icon">⬆</span> Upload</a></li>
+                <li><a href="transform.html"><span class="nav-icon">✦</span> Transform</a></li>
+                <li><a href="analysis.html"><span class="nav-icon">≈</span> Analysis</a></li>
+                <li><a href="results.html"><span class="nav-icon">▦</span> Results</a></li>
+            </ul>
+            <button class="nav-toggle" aria-label="Toggle menu">
+                <span></span><span></span><span></span>
+            </button>
+        </div>
+    </nav>
+
+    <!-- ========== HERO SECTION ========== -->
+    <section class="hero">
+        <div class="hero-content">
+            <div class="hero-badge">
+                <span class="badge-dot"></span>
+                CENG 384 — Digital Signal Processing
+            </div>
+            <h1>DSP Face Lab</h1>
+            <p>
+                A powerful facial image processing platform built with computer vision and
+                digital signal processing. Warp expressions, simulate aging, and analyze
+                transformations with real-time frequency domain insights.
+            </p>
+            <div class="hero-buttons">
+                <a href="upload.html" class="btn btn-primary btn-lg">
+                    Get Started →
+                </a>
+                <a href="#features" class="btn btn-secondary btn-lg">
+                    Explore Features
+                </a>
+            </div>
+        </div>
+    </section>
+
+    <!-- ========== FEATURES ========== -->
+    <section class="features" id="features">
+        <div class="container">
+            <div class="section-title">
+                <h2>Core Capabilities</h2>
+                <p>End-to-end facial transformation and analysis pipeline</p>
+            </div>
+            <div class="features-grid">
+
+                <!-- Card 1 — Upload & Detect -->
+                <div class="glass-card feature-card">
+                    <div class="feature-icon">📸</div>
+                    <h3>Upload &amp; Detect</h3>
+                    <p>Upload facial images, auto-detect face regions, and extract 468+ facial landmarks with precision.
+                    </p>
+                </div>
+
+                <!-- Card 2 — Transform -->
+                <div class="glass-card feature-card">
+                    <div class="feature-icon">🔮</div>
+                    <h3>Expression Warp</h3>
+                    <p>Enhance smiles, raise eyebrows, widen lips, and slim faces using triangle-based geometric
+                        deformation.</p>
+                </div>
+
+                <!-- Card 3 — Aging -->
+                <div class="glass-card feature-card">
+                    <div class="feature-icon">⏳</div>
+                    <h3>Age Simulation</h3>
+                    <p>Simulate aging or rejuvenation using frequency-domain filtering — wrinkle enhancement and skin
+                        smoothing.</p>
+                </div>
+
+                <!-- Card 4 — Evaluate -->
+                <div class="glass-card feature-card">
+                    <div class="feature-icon">📊</div>
+                    <h3>Analyze &amp; Evaluate</h3>
+                    <p>Fourier spectrum analysis, spectral energy metrics, and quality evaluation with MSE, PSNR &amp;
+                        SSIM.</p>
+                </div>
+
+            </div>
+        </div>
+    </section>
+
+    <!-- ========== HOW IT WORKS (Pipeline) ========== -->
+    <section class="how-it-works">
+        <div class="container">
+            <div class="section-title">
+                <h2>Processing Pipeline</h2>
+                <p>From input to evaluated output — a transparent, quantifiable workflow</p>
+            </div>
+            <div class="pipeline-steps">
+                <div class="pipeline-step">
+                    <div class="pipe-icon">📤</div>
+                    <span class="pipe-label">Image<br>Upload</span>
+                </div>
+                <div class="pipeline-arrow">→</div>
+                <div class="pipeline-step">
+                    <div class="pipe-icon">🔍</div>
+                    <span class="pipe-label">Preprocess<br>&amp; Validate</span>
+                </div>
+                <div class="pipeline-arrow">→</div>
+                <div class="pipeline-step">
+                    <div class="pipe-icon">📍</div>
+                    <span class="pipe-label">Landmark<br>Detection</span>
+                </div>
+                <div class="pipeline-arrow">→</div>
+                <div class="pipeline-step">
+                    <div class="pipe-icon">🔺</div>
+                    <span class="pipe-label">Geometric<br>Warping</span>
+                </div>
+                <div class="pipeline-arrow">→</div>
+                <div class="pipeline-step">
+                    <div class="pipe-icon">🌊</div>
+                    <span class="pipe-label">Frequency<br>Processing</span>
+                </div>
+                <div class="pipeline-arrow">→</div>
+                <div class="pipeline-step">
+                    <div class="pipe-icon">📈</div>
+                    <span class="pipe-label">Analysis<br>&amp; Metrics</span>
+                </div>
+            </div>
+        </div>
+    </section>
+
+    <!-- ========== TECH STACK STRIP ========== -->
+    <section style="padding: 40px 0 60px; position: relative; z-index: 1;">
+        <div class="container text-center">
+            <p
+                style="font-size: 0.8rem; color: var(--text-muted); letter-spacing: 2px; text-transform: uppercase; margin-bottom: 18px;">
+                Built With</p>
+            <div style="display: flex; gap: 24px; justify-content: center; flex-wrap: wrap;">
+                <span class="format-badge">Python</span>
+                <span class="format-badge">Flask</span>
+                <span class="format-badge">OpenCV</span>
+                <span class="format-badge">MediaPipe</span>
+                <span class="format-badge">NumPy</span>
+                <span class="format-badge">Matplotlib</span>
+            </div>
+        </div>
+    </section>
+
+    <!-- ========== FOOTER ========== -->
+    <footer class="footer">
+        <div class="container">
+            <div class="footer-content">
+                <div class="footer-brand">
+                    <div class="footer-logo">DSP FACE LAB</div>
+                    <p>Department of Software Engineering<br>Ankara Science University<br>CENG 384 — Intro. to Signal
+                        Processing<br>Instructor: Prof. Dr. Hakan Çağlar</p>
+                </div>
+                <div class="footer-team">
+                    <h4>Team Members</h4>
+                    <ul>
+                        <li>Nisa Nur Aklan – 220204012</li>
+                        <li>Ceyda Yıldız – 220204011</li>
+                        <li>Emir Ulaş Özdağ – 220204041</li>
+                        <li>Nisanur İlhan – 220204053</li>
+                        <li>Berke Akçay – 220204058</li>
+                        <li>Ahmet Talha Akyol – 230201006</li>
+                    </ul>
+                </div>
+            </div>
+            <div class="footer-bottom">
+                © 2026 DSP Face Lab · CENG 384 Project · Ankara Science University
+            </div>
+        </div>
+    </footer>
+
+    <script src="../static/js/main.js"></script>
+</body>
+
+</html>

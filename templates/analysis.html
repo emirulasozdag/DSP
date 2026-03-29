@@ -1,0 +1,202 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Analysis — DSP Face Lab</title>
+    <link rel="stylesheet" href="../static/css/style.css">
+</head>
+
+<body>
+    <div class="scanlines"></div>
+
+    <!-- ========== NAVBAR ========== -->
+    <nav class="navbar">
+        <div class="container">
+            <a href="index.html" class="nav-logo">
+                <div class="logo-icon">FL</div>
+                <span class="logo-text">DSP FACE LAB</span>
+            </a>
+            <ul class="nav-links">
+                <li><a href="index.html"><span class="nav-icon">⌂</span> Home</a></li>
+                <li><a href="upload.html"><span class="nav-icon">⬆</span> Upload</a></li>
+                <li><a href="transform.html"><span class="nav-icon">✦</span> Transform</a></li>
+                <li><a href="analysis.html" class="active"><span class="nav-icon">≈</span> Analysis</a></li>
+                <li><a href="results.html"><span class="nav-icon">▦</span> Results</a></li>
+            </ul>
+            <button class="nav-toggle" aria-label="Toggle menu">
+                <span></span><span></span><span></span>
+            </button>
+        </div>
+    </nav>
+
+    <!-- ========== PAGE HEADER ========== -->
+    <div class="container">
+        <div class="page-header">
+            <h1>Frequency Domain Analysis</h1>
+            <p>Fourier transform visualization and spectral energy distribution</p>
+        </div>
+
+        <!-- Steps bar -->
+        <div class="steps-bar">
+            <div class="step completed">
+                <span class="step-num">✓</span>
+                <span class="step-label">Upload</span>
+            </div>
+            <div class="step-line done"></div>
+            <div class="step completed">
+                <span class="step-num">✓</span>
+                <span class="step-label">Transform</span>
+            </div>
+            <div class="step-line done"></div>
+            <div class="step active">
+                <span class="step-num">3</span>
+                <span class="step-label">Analyze</span>
+            </div>
+            <div class="step-line"></div>
+            <div class="step">
+                <span class="step-num">4</span>
+                <span class="step-label">Results</span>
+            </div>
+        </div>
+
+        <!-- ========== SIDE-BY-SIDE COMPARISON ========== -->
+        <div class="comparison-grid">
+            <div class="comparison-card">
+                <div class="comparison-label">Original</div>
+                <div class="comparison-image glass-card" style="padding: 0;">
+                    <span class="placeholder-face-lg">👤</span>
+                </div>
+            </div>
+            <div class="comparison-card">
+                <div class="comparison-label">Transformed</div>
+                <div class="comparison-image glass-card" style="padding: 0; border-color: rgba(255, 0, 255, 0.2);">
+                    <span class="placeholder-face-lg">🎭</span>
+                </div>
+            </div>
+        </div>
+
+        <!-- ========== FREQUENCY SPECTRUM ========== -->
+        <div class="spectrum-section">
+            <div class="section-header">
+                <h2>Frequency Magnitude Spectrum</h2>
+                <div class="header-line"></div>
+            </div>
+
+            <div class="spectrum-grid">
+                <!-- Original Spectrum -->
+                <div class="glass-card spectrum-card">
+                    <div class="spectrum-title">Original — 2D FFT Magnitude</div>
+                    <div class="spectrum-visual">
+                        <div class="spectrum-placeholder"></div>
+                    </div>
+                </div>
+
+                <!-- Transformed Spectrum -->
+                <div class="glass-card spectrum-card">
+                    <div class="spectrum-title">Transformed — 2D FFT Magnitude</div>
+                    <div class="spectrum-visual">
+                        <div class="spectrum-placeholder transformed"></div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- ========== SPECTRAL ENERGY STATS ========== -->
+        <div class="energy-stats">
+            <div class="glass-card energy-card">
+                <div class="energy-value">4.2e6</div>
+                <div class="energy-label">Total Spectral Energy</div>
+            </div>
+            <div class="glass-card energy-card">
+                <div class="energy-value">1.8e6</div>
+                <div class="energy-label">High-Frequency Energy</div>
+            </div>
+            <div class="glass-card energy-card">
+                <div class="energy-value">2.4e6</div>
+                <div class="energy-label">Low-Frequency Energy</div>
+            </div>
+            <div class="glass-card energy-card">
+                <div class="energy-value">0.75</div>
+                <div class="energy-label">HF / LF Energy Ratio</div>
+            </div>
+        </div>
+
+        <!-- ========== ENERGY BAR CHART ========== -->
+        <div class="glass-card energy-bar-container mt-4">
+            <h3 style="font-size: 0.9rem; font-weight: 700; color: #fff; margin-bottom: 20px;">Energy Distribution
+                Comparison</h3>
+
+            <div class="energy-bar-row">
+                <span class="energy-bar-label">Orig. Low-Freq</span>
+                <div class="energy-bar-track">
+                    <div class="energy-bar-fill cyan" data-width="72%"></div>
+                </div>
+                <span class="energy-bar-percent">72%</span>
+            </div>
+
+            <div class="energy-bar-row">
+                <span class="energy-bar-label">Orig. High-Freq</span>
+                <div class="energy-bar-track">
+                    <div class="energy-bar-fill purple" data-width="28%"></div>
+                </div>
+                <span class="energy-bar-percent">28%</span>
+            </div>
+
+            <div class="energy-bar-row">
+                <span class="energy-bar-label">Trans. Low-Freq</span>
+                <div class="energy-bar-track">
+                    <div class="energy-bar-fill magenta" data-width="58%"></div>
+                </div>
+                <span class="energy-bar-percent">58%</span>
+            </div>
+
+            <div class="energy-bar-row">
+                <span class="energy-bar-label">Trans. High-Freq</span>
+                <div class="energy-bar-track">
+                    <div class="energy-bar-fill green" data-width="42%"></div>
+                </div>
+                <span class="energy-bar-percent">42%</span>
+            </div>
+        </div>
+
+        <!-- Action -->
+        <div class="action-bar" style="justify-content: space-between;">
+            <a href="transform.html" class="btn btn-secondary">← Back to Transform</a>
+            <a href="results.html" class="btn btn-primary">View Results →</a>
+        </div>
+
+    </div>
+
+    <!-- ========== FOOTER ========== -->
+    <footer class="footer">
+        <div class="container">
+            <div class="footer-content">
+                <div class="footer-brand">
+                    <div class="footer-logo">DSP FACE LAB</div>
+                    <p>Department of Software Engineering<br>Ankara Science University<br>CENG 384 — Intro. to Signal
+                        Processing</p>
+                </div>
+                <div class="footer-team">
+                    <h4>Team Members</h4>
+                    <ul>
+                        <li>Nisa Nur Aklan – 220204012</li>
+                        <li>Ceyda Yıldız – 220204011</li>
+                        <li>Emir Ulaş Özdağ – 220204041</li>
+                        <li>Nisanur İlhan – 220204053</li>
+                        <li>Berke Akçay – 220204058</li>
+                        <li>Ahmet Talha Akyol – 230201006</li>
+                    </ul>
+                </div>
+            </div>
+            <div class="footer-bottom">
+                © 2026 DSP Face Lab · CENG 384 Project · Ankara Science University
+            </div>
+        </div>
+    </footer>
+
+    <script src="../static/js/main.js"></script>
+</body>
+
+</html>
