@@ -432,6 +432,8 @@ input,select,button{font-family:inherit;font-size:inherit}
 .age-badge-ai strong{color:var(--cyan)}
 
 /* ═══════════════════ METHOD COMPARISON (FR-3.4.9) ═══════════════════ */
+.aging-right-col{display:flex;flex-direction:column;gap:14px;min-width:0}
+.aging-right-col .method-compare-card{margin-top:0}
 .method-compare-card{margin-top:18px}
 .method-compare-grid{display:grid;grid-template-columns:1fr 12px 1fr 12px 1fr;gap:0;align-items:start}
 .mcg-col{display:flex;flex-direction:column;align-items:center;gap:8px}
@@ -441,6 +443,9 @@ input,select,button{font-family:inherit;font-size:inherit}
 .mcg-label-ai{color:var(--cyan);background:rgba(6,182,212,.06);border-color:rgba(6,182,212,.15)}
 .mcg-body{background:var(--bg);border-radius:var(--radius-sm);padding:12px;width:100%;border:1px solid var(--border);display:flex;align-items:center;justify-content:center}
 .mcg-body .face-svg{max-width:160px}
+.mcg-body-sm{padding:8px}
+.mcg-body-sm .face-svg{max-width:100px}
+.method-compare-compact .mcg-label{font-size:.65rem;padding:3px 8px}
 @media(max-width:900px){
   .method-compare-grid{grid-template-columns:1fr;gap:16px}
   .mcg-divider{display:none}

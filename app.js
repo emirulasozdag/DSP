@@ -148,7 +148,7 @@ $$('.seg').forEach(seg => {
       /* FR-3.4.9: show method comparison panel when AI mode is selected */
       if(seg.id === 'ageMethod'){
         const methodCompare = $('#methodCompareCard');
-        if(methodCompare) methodCompare.style.display = btn.dataset.v === 'ai' ? 'block' : 'none';
+        if(methodCompare) methodCompare.style.display = 'block';
       }
     });
   });
