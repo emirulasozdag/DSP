@@ -44,6 +44,21 @@
 <!-- ═══ MAIN ═══ -->
 <main class="main" id="main">
 
+<!-- Pipeline Progress Strip -->
+<div class="pipeline-strip" id="pipelineStrip">
+  <div class="ps-step ps-active" data-step="upload"><div class="ps-node">1</div><div>Upload</div></div>
+  <div class="ps-line" id="pline-1"></div>
+  <div class="ps-step" data-step="preprocess"><div class="ps-node">2</div><div>Preprocess</div></div>
+  <div class="ps-line" id="pline-2"></div>
+  <div class="ps-step" data-step="landmarks"><div class="ps-node">3</div><div>Landmarks</div></div>
+  <div class="ps-line" id="pline-3"></div>
+  <div class="ps-step" data-step="expression"><div class="ps-node">4</div><div>Expression</div></div>
+  <div class="ps-line" id="pline-4"></div>
+  <div class="ps-step" data-step="aging"><div class="ps-node">5</div><div>Aging</div></div>
+  <div class="ps-line" id="pline-5"></div>
+  <div class="ps-step" data-step="analysis"><div class="ps-node">6</div><div>Analysis</div></div>
+</div>
+
 <!-- ═══════ PAGE: UPLOAD ═══════ -->
 <div class="page active" id="page-upload">
   <div class="page-top">
@@ -482,7 +497,7 @@
         <input type="range" min="0" max="100" value="40" class="slider" id="sDetail"/>
       </div>
 
-      <button class="btn btn-primary btn-full" style="margin-top:1rem">▶ Simulate</button>
+      <button class="btn btn-primary btn-full" style="margin-top:1rem" id="btnSimulate">▶ Simulate</button>
     </div>
 
     <div class="aging-right-col">
@@ -757,6 +772,7 @@
 
 </main>
 
+<div id="toastContainer"></div>
 <script src="app.js"></script>
 </body>
 </html>
