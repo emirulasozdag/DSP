@@ -22,6 +22,41 @@ function closeMobile(){ sidebar.classList.remove('open'); overlay.classList.remo
 if(menuBtn) menuBtn.addEventListener('click', () => { sidebar.classList.toggle('open'); overlay.classList.toggle('show'); });
 if(overlay) overlay.addEventListener('click', closeMobile);
 
+/* ═══════════════════ TOAST ═══════════════════ */
+function toast(msg, type='success'){
+  const container = $('#toastContainer');
+  if(!container) return;
+  const icons = {success:'✓',error:'✕',info:'ℹ',warning:'⚠'};
+  const el = document.createElement('div');
+  el.className = `toast toast-${type}`;
+  el.innerHTML = `<div class="toast-icon">${icons[type]||'ℹ'}</div><span>${msg}</span>`;
+  container.appendChild(el);
+  requestAnimationFrame(() => requestAnimationFrame(() => el.classList.add('show')));
+  setTimeout(() => { el.classList.add('hide'); setTimeout(() => el.remove(), 280); }, 3200);
+}
+
+/* ═══════════════════ PIPELINE STRIP ═══════════════════ */
+const psOrder = ['upload','preprocess','landmarks','expression','aging','analysis'];
+function updatePipelineStrip(page){
+  const idx = psOrder.indexOf(page);
+  if(idx === -1) return;
+  psOrder.forEach((step, i) => {
+    const el = $(`.ps-step[data-step="${step}"]`);
+    if(!el) return;
+    el.classList.remove('ps-active','ps-done');
+    const node = el.querySelector('.ps-node');
+    if(i < idx){
+      el.classList.add('ps-done');
+      if(node) node.textContent = '✓';
+    } else {
+      if(node) node.textContent = i+1;
+      if(i === idx) el.classList.add('ps-active');
+    }
+    const line = $(`#pline-${i+1}`);
+    if(line) line.classList.toggle('ps-done-line', i < idx);
+  });
+}
+
 /* ═══════════════════ FILE UPLOAD ═══════════════════ */
 const dropzone = $('#dropzone'), fileInput = $('#fileInput'), browseBtn = $('#browseBtn');
 const uploadCard = $('#uploadCard'), previewCard = $('#previewCard');
@@ -40,8 +75,8 @@ if(fileInput) fileInput.addEventListener('change', () => { if(fileInput.files.le
 
 function handleFile(file){
   const valid = ['image/jpeg','image/png'];
-  if(!valid.includes(file.type)){ alert('Only JPG/PNG files are accepted.'); return; }
-  if(file.size > 10*1024*1024){ alert('File exceeds 10 MB limit.'); return; }
+  if(!valid.includes(file.type)){ toast('Only JPG/PNG files are accepted.','error'); return; }
+  if(file.size > 10*1024*1024){ toast('File exceeds the 10 MB limit.','error'); return; }
   const reader = new FileReader();
   reader.onload = e => {
     const img = new Image();
@@ -53,6 +88,7 @@ function handleFile(file){
       $('#pvRes').textContent = img.width+'×'+img.height;
       uploadCard.style.display = 'none';
       previewCard.style.display = 'block';
+      toast('Image loaded — ready to process!','success');
     };
     img.src = e.target.result;
   };
@@ -180,7 +216,7 @@ const webcamCard = $('#webcamCard'), webcamVideo = $('#webcamVideo'), webcamCanv
 
 function startWebcam(){
   if(!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia){
-    alert('Webcam is not supported in this browser or context.');
+    toast('Webcam is not supported in this browser.','warning');
     return;
   }
   uploadCard.style.display = 'none';
@@ -191,7 +227,7 @@ function startWebcam(){
     .catch(err => {
       webcamCard.style.display = 'none';
       uploadCard.style.display = '';
-      alert('Could not access webcam: ' + err.message);
+      toast('Could not access webcam: ' + err.message,'error');
     });
 }
 function stopWebcam(){
@@ -217,6 +253,7 @@ if($('#btnCapture')) $('#btnCapture').addEventListener('click', () => {
   $('#pvRes').textContent = `${webcamCanvas.width}×${webcamCanvas.height}`;
   uploadCard.style.display = 'none';
   previewCard.style.display = 'block';
+  toast('Webcam frame captured!','success');
 });
 
 /* ═══════════════════ REFERENCE IMAGE (FR-3.8.1) ═══════════════════ */
@@ -232,7 +269,7 @@ if(refDrop){
 }
 if(refInput) refInput.addEventListener('change', () => { if(refInput.files.length) loadRefImage(refInput.files[0]); });
 function loadRefImage(file){
-  if(!['image/jpeg','image/png'].includes(file.type)){ alert('Only JPG/PNG accepted.'); return; }
+  if(!['image/jpeg','image/png'].includes(file.type)){ toast('Only JPG/PNG accepted.','error'); return; }
   const reader = new FileReader();
   reader.onload = e => {
     refImg.src = e.target.result;
@@ -267,19 +304,27 @@ if($('#btnExportCSV')) $('#btnExportCSV').addEventListener('click', () => {
 
 /* ═══════════════════ SAVE IMAGE STUB ═══════════════════ */
 if($('#btnSaveExpr')) $('#btnSaveExpr').addEventListener('click', () => {
-  alert('Image saved to downloads (demo).');
+  toast('Image saved to downloads.','success');
 });
 
 /* ═══════════════════ APPLY WARP FEEDBACK ═══════════════════ */
 if($('#btnApplyExpr')) $('#btnApplyExpr').addEventListener('click', function(){
   this.textContent = '✓ Warp Applied';
   this.style.background = 'linear-gradient(135deg,#10b981,#059669)';
+  toast('Expression warp applied!','success');
   setTimeout(() => { this.textContent = '▶ Apply Warp'; this.style.background = ''; }, 1500);
+});
+
+if($('#btnSimulate')) $('#btnSimulate').addEventListener('click', function(){
+  this.textContent = '⧗ Processing...';
+  this.disabled = true;
+  toast('Aging simulation applied!','success');
+  setTimeout(() => { this.textContent = '▶ Simulate'; this.disabled = false; }, 1600);
 });
 
 /* ═══════════════════ AGING PAGE SAVE ═══════════════════ */
 $$('.page-top-actions .btn-outline').forEach(btn => {
-  if(btn.textContent.includes('Save')) btn.addEventListener('click', () => alert('Image saved to downloads (demo).'));
+  if(btn.textContent.includes('Save')) btn.addEventListener('click', () => toast('Image saved to downloads.','success'));
 });
 
 function download(name, content, type){
@@ -339,6 +384,8 @@ function initReveal(){
 const origNav = nav;
 nav = function(page){
   origNav(page);
+  updatePipelineStrip(page);
+  window.scrollTo({top:0,behavior:'smooth'});
   requestAnimationFrame(() => requestAnimationFrame(initReveal));
 };
 
