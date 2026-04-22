@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width,initial-scale=1.0"/>
   <title>FaceWarp DSP</title>
   <link rel="stylesheet" href="style.css"/>
-  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet"/>
+  <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;600;700;800&family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600;700&display=swap" rel="stylesheet"/>
 </head>
 <body>
 
@@ -60,23 +60,34 @@
 </div>
 
 <!-- ═══════ PAGE: UPLOAD ═══════ -->
-<div class="page active" id="page-upload">
-  <div class="page-top">
-    <div>
-      <div class="breadcrumb">Pipeline <span class="bc-sep">/</span> <span class="bc-active">Image Upload</span></div>
-      <h1>Upload Facial Image</h1>
-    </div>
-    <div class="page-top-actions">
-      <span class="status-pill status-waiting">Waiting for image</span>
-    </div>
+<div class="page active" id="page-upload" style="position:relative">
+
+  <!-- Animated background -->
+  <div class="hero-bg" aria-hidden="true">
+    <div class="hero-orb hero-orb-1"></div>
+    <div class="hero-orb hero-orb-2"></div>
+    <svg class="hero-grid" xmlns="http://www.w3.org/2000/svg"><defs><pattern id="hgrid" width="40" height="40" patternUnits="userSpaceOnUse"><path d="M 40 0 L 0 0 0 40" fill="none" stroke="rgba(99,102,241,0.06)" stroke-width="1"/></pattern></defs><rect width="100%" height="100%" fill="url(#hgrid)"/></svg>
   </div>
+
+  <!-- Hero Header -->
+  <div class="hero-header">
+    <div class="hero-badge"><span class="hero-badge-dot"></span>DSP Pipeline &middot; v2.0</div>
+    <h1 class="hero-title">Face<span class="hero-grad">Warp</span> Pipeline</h1>
+    <p class="hero-subtitle">A 6-step facial image processing system &mdash; from raw upload to frequency-domain analysis.</p>
+  </div>
+
+  <!-- Two-column layout -->
+  <div class="hero-layout">
+
+    <!-- Left: Upload -->
+    <div class="upload-col">
 
   <div class="card card-upload" id="uploadCard">
     <div class="dropzone" id="dropzone">
       <div class="dz-ring">
         <svg viewBox="0 0 24 24"><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>
       </div>
-      <div class="dz-title">Drag &amp; drop your face image</div>
+      <div class="dz-title">Drop your face image</div>
       <div class="dz-or">or</div>
       <button class="btn btn-primary btn-sm" id="browseBtn">Browse Files</button>
       <input type="file" id="fileInput" accept=".jpg,.jpeg,.png" hidden/>
@@ -121,108 +132,233 @@
     </div>
   </div>
 
+    </div><!-- /upload-col -->
+
+    <!-- Right: Animated Face Visual -->
+    <div class="hero-visual">
+      <div class="hero-face-wrap">
+        <div class="hero-face-bg"></div>
+        <svg viewBox="0 0 300 340" class="hero-face-svg">
+          <defs>
+            <radialGradient id="faceBgG" cx="50%" cy="50%" r="50%">
+              <stop offset="0%" stop-color="rgba(99,102,241,0.12)"/>
+              <stop offset="100%" stop-color="transparent"/>
+            </radialGradient>
+          </defs>
+          <ellipse cx="150" cy="160" rx="105" ry="130" fill="url(#faceBgG)" stroke="rgba(99,102,241,0.18)" stroke-width="1.5" stroke-dasharray="4 4"/>
+          <!-- Scan line -->
+          <line x1="45" y1="160" x2="255" y2="160" stroke="rgba(6,182,212,0.35)" stroke-width="1" class="scan-line"/>
+          <!-- Jaw -->
+          <circle cx="50" cy="130" r="3" fill="#8b5cf6"/><circle cx="58" cy="180" r="3" fill="#8b5cf6"/><circle cx="75" cy="228" r="3" fill="#8b5cf6"/><circle cx="108" cy="263" r="3" fill="#8b5cf6"/><circle cx="150" cy="278" r="3" fill="#8b5cf6"/><circle cx="192" cy="263" r="3" fill="#8b5cf6"/><circle cx="225" cy="228" r="3" fill="#8b5cf6"/><circle cx="242" cy="180" r="3" fill="#8b5cf6"/><circle cx="250" cy="130" r="3" fill="#8b5cf6"/>
+          <!-- Brows -->
+          <circle cx="90" cy="98" r="3" fill="#a78bfa"/><circle cx="105" cy="95" r="3" fill="#a78bfa"/><circle cx="120" cy="98" r="3" fill="#a78bfa"/><circle cx="180" cy="98" r="3" fill="#a78bfa"/><circle cx="195" cy="95" r="3" fill="#a78bfa"/><circle cx="210" cy="98" r="3" fill="#a78bfa"/>
+          <!-- Eyes -->
+          <circle cx="90" cy="128" r="3" fill="#06b6d4"/><circle cx="104" cy="122" r="3" fill="#06b6d4"/><circle cx="118" cy="128" r="3" fill="#06b6d4"/><circle cx="182" cy="128" r="3" fill="#06b6d4"/><circle cx="196" cy="122" r="3" fill="#06b6d4"/><circle cx="210" cy="128" r="3" fill="#06b6d4"/>
+          <!-- Nose -->
+          <circle cx="150" cy="130" r="2.5" fill="#f59e0b"/><circle cx="150" cy="160" r="2.5" fill="#f59e0b"/><circle cx="150" cy="185" r="2.5" fill="#f59e0b"/><circle cx="132" cy="183" r="2.5" fill="#f59e0b"/><circle cx="168" cy="183" r="2.5" fill="#f59e0b"/>
+          <!-- Mouth -->
+          <circle cx="115" cy="218" r="3" fill="#f472b6"/><circle cx="132" cy="208" r="3" fill="#f472b6"/><circle cx="150" cy="208" r="3" fill="#f472b6"/><circle cx="168" cy="208" r="3" fill="#f472b6"/><circle cx="185" cy="218" r="3" fill="#f472b6"/><circle cx="150" cy="232" r="3" fill="#f472b6"/>
+          <!-- Labels -->
+          <text x="36" y="178" fill="#8b5cf6" font-size="9" font-family="JetBrains Mono,monospace" text-anchor="end" opacity="0.7">jaw</text>
+          <text x="74" y="90" fill="#a78bfa" font-size="9" font-family="JetBrains Mono,monospace" opacity="0.7">brow</text>
+          <text x="76" y="118" fill="#06b6d4" font-size="9" font-family="JetBrains Mono,monospace" text-anchor="end" opacity="0.7">eye</text>
+          <text x="154" y="112" fill="#f59e0b" font-size="9" font-family="JetBrains Mono,monospace" opacity="0.7">nose</text>
+          <text x="100" y="238" fill="#f472b6" font-size="9" font-family="JetBrains Mono,monospace" text-anchor="end" opacity="0.7">mouth</text>
+        </svg>
+        <!-- Floating chips -->
+        <div class="hero-chip hero-chip-1">68 pts</div>
+        <div class="hero-chip hero-chip-2">FFT</div>
+        <div class="hero-chip hero-chip-3">GAN</div>
+      </div>
+
+      <!-- Mini pipeline -->
+      <div class="hero-pipeline">
+        <div class="hps-step hps-active"><span class="hps-dot"></span>Upload</div>
+        <div class="hps-arrow">&#8594;</div>
+        <div class="hps-step">Preprocess</div>
+        <div class="hps-arrow">&#8594;</div>
+        <div class="hps-step">Landmarks</div>
+        <div class="hps-arrow">&#8594;</div>
+        <div class="hps-step">Expression</div>
+        <div class="hps-arrow">&#8594;</div>
+        <div class="hps-step">Aging</div>
+        <div class="hps-arrow">&#8594;</div>
+        <div class="hps-step">Analysis</div>
+      </div>
+    </div><!-- /hero-visual -->
+
+  </div><!-- /hero-layout -->
+
+  <!-- Stats bar -->
+  <div class="hero-stats">
+    <div class="hstat"><span class="hstat-val">68</span><div class="hstat-label">Landmarks</div></div>
+    <div class="hstat"><span class="hstat-val">3</span><div class="hstat-label">Warp Methods</div></div>
+    <div class="hstat"><span class="hstat-val">0.85+</span><div class="hstat-label">SSIM Score</div></div>
+    <div class="hstat"><span class="hstat-val">FFT</span><div class="hstat-label">Freq Analysis</div></div>
+  </div>
 
 </div>
 
 <!-- ═══════ PAGE: PREPROCESS ═══════ -->
-<div class="page" id="page-preprocess">
-  <div class="page-top">
-    <div>
-      <div class="breadcrumb">Pipeline <span class="bc-sep">/</span> <span class="bc-active">Preprocessing</span></div>
-      <h1>Image Preprocessing</h1>
-    </div>
-    <div class="page-top-actions">
-      <span class="status-pill status-ready">Ready</span>
-    </div>
+<div class="page" id="page-preprocess" style="position:relative">
+
+  <div class="hero-bg" aria-hidden="true">
+    <div class="hero-orb hero-orb-1" style="background:radial-gradient(circle,rgba(16,185,129,0.12),transparent 70%);width:380px;height:380px;top:-80px;right:6%"></div>
+    <div class="hero-orb hero-orb-2" style="background:radial-gradient(circle,rgba(99,102,241,0.08),transparent 70%);width:300px;height:300px;bottom:0;left:4%"></div>
+    <svg class="hero-grid" xmlns="http://www.w3.org/2000/svg"><defs><pattern id="hgrid-pp" width="40" height="40" patternUnits="userSpaceOnUse"><path d="M 40 0 L 0 0 0 40" fill="none" stroke="rgba(16,185,129,0.04)" stroke-width="1"/></pattern></defs><rect width="100%" height="100%" fill="url(#hgrid-pp)"/></svg>
   </div>
 
-  <div class="steps-bar">
-    <div class="step done"><div class="step-num">1</div><span>Face Detect</span></div>
-    <div class="step-line done-line"></div>
-    <div class="step done"><div class="step-num">2</div><span>Crop &amp; Align</span></div>
-    <div class="step-line done-line"></div>
-    <div class="step done"><div class="step-num">3</div><span>Normalise</span></div>
-    <div class="step-line"></div>
-    <div class="step"><div class="step-num">4</div><span>Grayscale</span></div>
+  <div class="hero-header hero-header-sm">
+    <div class="hero-badge"><span class="hero-badge-dot" style="background:#34d399;box-shadow:0 0 8px rgba(52,211,153,0.85)"></span>Step 2 &middot; Preprocessing</div>
+    <h1 class="hero-title hero-title-sm">Image <span class="hero-grad">Preprocessing</span></h1>
+    <p class="hero-subtitle">Face detection, alignment, and normalization to prepare the image for downstream analysis.</p>
   </div>
+  <!-- Two-column layout -->
+  <div class="hero-layout">
 
-  <div class="grid-2">
-    <div class="card">
-      <div class="card-head"><h3>Face Detection</h3><span class="tag tag-done">Auto</span></div>
-      <div class="proc-preview">
-        <svg viewBox="0 0 200 200" class="proc-svg">
-          <rect width="200" height="200" rx="8" fill="#0c1222"/>
-          <rect x="38" y="20" width="124" height="160" rx="4" fill="none" stroke="var(--green)" stroke-width="2" stroke-dasharray="6 3"/>
-          <text x="100" y="14" text-anchor="middle" fill="var(--green)" font-size="8" font-family="JetBrains Mono">Face Region Detected</text>
-          <ellipse cx="100" cy="90" rx="52" ry="65" fill="rgba(139,92,246,.06)" stroke="rgba(139,92,246,.2)" stroke-width="1"/>
-          <ellipse cx="82" cy="78" rx="8" ry="5" fill="none" stroke="#06b6d4" stroke-width="1"/>
-          <ellipse cx="118" cy="78" rx="8" ry="5" fill="none" stroke="#06b6d4" stroke-width="1"/>
-          <path d="M88 118 Q100 128 112 118" fill="none" stroke="#f472b6" stroke-width="1.5"/>
-        </svg>
-      </div>
-      <p class="card-desc">Facial region automatically detected using Haar Cascade / HOG detector.</p>
-    </div>
+    <!-- Left: Controls -->
+    <div class="upload-col">
 
-    <div class="card">
-      <div class="card-head"><h3>Crop &amp; Normalise</h3><span class="tag tag-done">Auto</span></div>
-      <div class="proc-preview">
-        <svg viewBox="0 0 200 200" class="proc-svg">
-          <rect width="200" height="200" rx="8" fill="#0c1222"/>
-          <!-- Before -->
-          <rect x="10" y="30" width="80" height="100" rx="3" fill="none" stroke="rgba(255,255,255,.12)" stroke-width="1"/>
-          <rect x="25" y="40" width="50" height="65" rx="2" fill="none" stroke="var(--amber)" stroke-width="1.5" stroke-dasharray="4 2"/>
-          <text x="50" y="155" text-anchor="middle" fill="var(--muted)" font-size="7" font-family="JetBrains Mono">Raw</text>
-          <!-- Arrow -->
-          <path d="M100 80 L118 80" fill="none" stroke="var(--muted)" stroke-width="1.5" marker-end="url(#arrowhead)"/>
-          <defs><marker id="arrowhead" markerWidth="6" markerHeight="4" refX="6" refY="2" orient="auto"><polygon points="0 0, 6 2, 0 4" fill="var(--muted)"/></marker></defs>
-          <!-- After -->
-          <rect x="125" y="25" width="65" height="80" rx="3" fill="rgba(16,185,129,.06)" stroke="var(--green)" stroke-width="1.5"/>
-          <text x="157" y="120" text-anchor="middle" fill="var(--green)" font-size="7" font-family="JetBrains Mono">256×256</text>
-          <text x="157" y="155" text-anchor="middle" fill="var(--muted)" font-size="7" font-family="JetBrains Mono">Normalised</text>
-        </svg>
-      </div>
-      <p class="card-desc">Cropped to face bounds, resized to 256×256 standard resolution.</p>
-    </div>
-  </div>
-
-
-  <div class="card">
-    <div class="card-head"><h3>Color Mode</h3><span class="tag">Optional</span></div>
-    <div class="color-mode-row">
-      <label class="radio-card active-radio" id="radioRGB">
-        <div class="rc-dot"></div>
-        <div>
-          <strong>RGB Color</strong>
-          <p>Full color for expression manipulation</p>
+      <div class="card" style="margin-bottom:16px">
+        <div class="card-head"><h3>Pipeline Steps</h3><span class="status-pill status-ready">Ready</span></div>
+        <div class="steps-bar">
+          <div class="step done"><div class="step-num">1</div><span>Face Detect</span></div>
+          <div class="step-line done-line"></div>
+          <div class="step done"><div class="step-num">2</div><span>Crop &amp; Align</span></div>
+          <div class="step-line done-line"></div>
+          <div class="step done"><div class="step-num">3</div><span>Normalise</span></div>
+          <div class="step-line"></div>
+          <div class="step"><div class="step-num">4</div><span>Grayscale</span></div>
         </div>
-      </label>
-      <label class="radio-card" id="radioGray">
-        <div class="rc-dot"></div>
-        <div>
-          <strong>Grayscale</strong>
-          <p>Required for frequency domain analysis</p>
+      </div>
+
+      <div class="card">
+        <div class="card-head"><h3>Color Mode</h3><span class="tag">Optional</span></div>
+        <div class="color-mode-row">
+          <label class="radio-card active-radio" id="radioRGB">
+            <div class="rc-dot"></div>
+            <div>
+              <strong>RGB Color</strong>
+              <p>Full color for expression manipulation</p>
+            </div>
+          </label>
+          <label class="radio-card" id="radioGray">
+            <div class="rc-dot"></div>
+            <div>
+              <strong>Grayscale</strong>
+              <p>Required for frequency domain analysis</p>
+            </div>
+          </label>
         </div>
-      </label>
-    </div>
-    <p class="card-desc">Grayscale conversion applied automatically when frequency analysis is selected.</p>
+        <p class="card-desc">Grayscale conversion applied automatically when frequency analysis is selected.</p>
+      </div>
+
+      <div class="page-nav">
+        <button class="btn btn-ghost" onclick="nav('upload')">← Back</button>
+        <button class="btn btn-primary" onclick="nav('landmarks')">Continue to Landmarks →</button>
+      </div>
+
+    </div><!-- /upload-col -->
+
+    <!-- Right: Preprocessing Visual -->
+    <div class="hero-visual">
+      <div class="hero-face-wrap">
+        <div class="hero-face-bg" style="background:radial-gradient(circle,rgba(16,185,129,0.15),rgba(99,102,241,0.08),transparent 70%)"></div>
+        <svg viewBox="0 0 300 340" class="hero-face-svg">
+          <defs>
+            <radialGradient id="ppBgG" cx="50%" cy="50%" r="50%">
+              <stop offset="0%" stop-color="rgba(16,185,129,0.10)"/>
+              <stop offset="100%" stop-color="transparent"/>
+            </radialGradient>
+            <marker id="ppArr" markerWidth="6" markerHeight="4" refX="5" refY="2" orient="auto">
+              <polygon points="0 0,6 2,0 4" fill="rgba(16,185,129,0.6)"/>
+            </marker>
+          </defs>
+          <!-- Background ellipse -->
+          <ellipse cx="150" cy="170" rx="110" ry="130" fill="url(#ppBgG)" stroke="rgba(16,185,129,0.12)" stroke-width="1" stroke-dasharray="4 4"/>
+          <!-- HUD corner brackets (green) -->
+          <path d="M55 60 L55 30 L85 30" fill="none" stroke="rgba(16,185,129,0.75)" stroke-width="2" stroke-linecap="round"/>
+          <path d="M245 60 L245 30 L215 30" fill="none" stroke="rgba(16,185,129,0.75)" stroke-width="2" stroke-linecap="round"/>
+          <path d="M55 280 L55 310 L85 310" fill="none" stroke="rgba(16,185,129,0.75)" stroke-width="2" stroke-linecap="round"/>
+          <path d="M245 280 L245 310 L215 310" fill="none" stroke="rgba(16,185,129,0.75)" stroke-width="2" stroke-linecap="round"/>
+          <!-- Corner dots -->
+          <circle cx="55" cy="30" r="2.5" fill="#34d399"/><circle cx="245" cy="30" r="2.5" fill="#34d399"/>
+          <circle cx="55" cy="310" r="2.5" fill="#34d399"/><circle cx="245" cy="310" r="2.5" fill="#34d399"/>
+          <!-- Jaw -->
+          <circle cx="72" cy="155" r="3.5" fill="rgba(139,92,246,0.6)"/><circle cx="79" cy="200" r="3.5" fill="rgba(139,92,246,0.6)"/>
+          <circle cx="94" cy="245" r="3.5" fill="rgba(139,92,246,0.6)"/><circle cx="120" cy="275" r="3.5" fill="rgba(139,92,246,0.6)"/>
+          <circle cx="150" cy="285" r="3.5" fill="rgba(139,92,246,0.6)"/><circle cx="180" cy="275" r="3.5" fill="rgba(139,92,246,0.6)"/>
+          <circle cx="206" cy="245" r="3.5" fill="rgba(139,92,246,0.6)"/><circle cx="221" cy="200" r="3.5" fill="rgba(139,92,246,0.6)"/>
+          <circle cx="228" cy="155" r="3.5" fill="rgba(139,92,246,0.6)"/>
+          <!-- Brows -->
+          <circle cx="100" cy="115" r="3" fill="rgba(167,139,250,0.7)"/><circle cx="115" cy="110" r="3" fill="rgba(167,139,250,0.7)"/><circle cx="130" cy="112" r="3" fill="rgba(167,139,250,0.7)"/>
+          <circle cx="170" cy="112" r="3" fill="rgba(167,139,250,0.7)"/><circle cx="185" cy="110" r="3" fill="rgba(167,139,250,0.7)"/><circle cx="200" cy="115" r="3" fill="rgba(167,139,250,0.7)"/>
+          <!-- Eyes -->
+          <circle cx="100" cy="138" r="3" fill="#06b6d4"/><circle cx="114" cy="132" r="3" fill="#06b6d4"/><circle cx="128" cy="138" r="3" fill="#06b6d4"/>
+          <circle cx="172" cy="138" r="3" fill="#06b6d4"/><circle cx="186" cy="132" r="3" fill="#06b6d4"/><circle cx="200" cy="138" r="3" fill="#06b6d4"/>
+          <!-- Nose -->
+          <circle cx="150" cy="148" r="2.5" fill="#f59e0b"/><circle cx="150" cy="168" r="2.5" fill="#f59e0b"/>
+          <circle cx="150" cy="188" r="2.5" fill="#f59e0b"/><circle cx="135" cy="190" r="2.5" fill="#f59e0b"/><circle cx="165" cy="190" r="2.5" fill="#f59e0b"/>
+          <!-- Mouth -->
+          <circle cx="122" cy="224" r="3" fill="rgba(244,114,182,0.8)"/><circle cx="136" cy="216" r="3" fill="rgba(244,114,182,0.8)"/>
+          <circle cx="150" cy="214" r="3" fill="rgba(244,114,182,0.8)"/><circle cx="164" cy="216" r="3" fill="rgba(244,114,182,0.8)"/>
+          <circle cx="178" cy="224" r="3" fill="rgba(244,114,182,0.8)"/><circle cx="150" cy="238" r="3" fill="rgba(244,114,182,0.8)"/>
+          <!-- Scan line -->
+          <line x1="55" y1="170" x2="245" y2="170" stroke="rgba(16,185,129,0.4)" stroke-width="1" class="scan-line"/>
+          <!-- Labels -->
+          <text x="150" y="22" text-anchor="middle" fill="#34d399" font-size="8" font-family="JetBrains Mono,monospace" letter-spacing="0.08em">PREPROCESSING · ACTIVE</text>
+          <text x="150" y="325" text-anchor="middle" fill="rgba(52,211,153,0.5)" font-size="7.5" font-family="JetBrains Mono,monospace" letter-spacing="0.06em">256×256 · NORMALISED</text>
+        </svg>
+        <!-- Floating chips -->
+        <div class="hero-chip hero-chip-1">256px</div>
+        <div class="hero-chip hero-chip-2">HOG</div>
+        <div class="hero-chip hero-chip-3">RGB→Gray</div>
+      </div>
+
+      <!-- Mini pipeline strip -->
+      <div class="hero-pipeline">
+        <div class="hps-step">Upload</div>
+        <div class="hps-arrow">&#8594;</div>
+        <div class="hps-step hps-active"><span class="hps-dot"></span>Preprocess</div>
+        <div class="hps-arrow">&#8594;</div>
+        <div class="hps-step">Landmarks</div>
+        <div class="hps-arrow">&#8594;</div>
+        <div class="hps-step">Expression</div>
+        <div class="hps-arrow">&#8594;</div>
+        <div class="hps-step">Aging</div>
+        <div class="hps-arrow">&#8594;</div>
+        <div class="hps-step">Analysis</div>
+      </div>
+    </div><!-- /hero-visual -->
+
+  </div><!-- /hero-layout -->
+
+  <!-- Stats bar -->
+  <div class="hero-stats">
+    <div class="hstat"><span class="hstat-val">256×256</span><div class="hstat-label">Output Size</div></div>
+    <div class="hstat"><span class="hstat-val">4</span><div class="hstat-label">Pipeline Steps</div></div>
+    <div class="hstat"><span class="hstat-val">HOG</span><div class="hstat-label">Face Detector</div></div>
+    <div class="hstat"><span class="hstat-val">RGB</span><div class="hstat-label">Color Mode</div></div>
   </div>
 
-  <div class="page-nav">
-    <button class="btn btn-ghost" onclick="nav('upload')">← Back</button>
-    <button class="btn btn-primary" onclick="nav('landmarks')">Continue to Landmarks →</button>
-  </div>
 </div>
 
 <!-- ═══════ PAGE: LANDMARKS ═══════ -->
-<div class="page" id="page-landmarks">
-  <div class="page-top">
-    <div>
-      <div class="breadcrumb">Pipeline <span class="bc-sep">/</span> <span class="bc-active">Landmark Detection</span></div>
-      <h1>Facial Landmarks</h1>
-    </div>
-    <div class="page-top-actions">
-      <button class="btn btn-outline btn-sm" id="btnExportCSV">⤓ Export CSV</button>
-    </div>
+<div class="page" id="page-landmarks" style="position:relative">
+
+  <div class="hero-bg" aria-hidden="true">
+    <div class="hero-orb hero-orb-1" style="background:radial-gradient(circle,rgba(139,92,246,0.13),transparent 70%);width:420px;height:420px;top:-100px;right:8%"></div>
+    <div class="hero-orb hero-orb-2" style="background:radial-gradient(circle,rgba(6,182,212,0.09),transparent 70%);width:320px;height:320px;bottom:0;left:2%"></div>
+    <svg class="hero-grid" xmlns="http://www.w3.org/2000/svg"><defs><pattern id="hgrid-lm" width="40" height="40" patternUnits="userSpaceOnUse"><path d="M 40 0 L 0 0 0 40" fill="none" stroke="rgba(139,92,246,0.05)" stroke-width="1"/></pattern></defs><rect width="100%" height="100%" fill="url(#hgrid-lm)"/></svg>
+  </div>
+
+  <div class="hero-header hero-header-sm">
+    <div class="hero-badge"><span class="hero-badge-dot" style="background:#a78bfa;box-shadow:0 0 8px rgba(167,139,250,0.85)"></span>Step 3 &middot; Landmark Detection</div>
+    <h1 class="hero-title hero-title-sm">68-Point <span class="hero-grad">Landmark</span> Detection</h1>
+    <p class="hero-subtitle">Precise facial landmark localization across 5 regions using dlib and MediaPipe.</p>
+  </div>
+  <div class="page-act-row">
+    <button class="btn btn-outline btn-sm" id="btnExportCSV">⤓ Export CSV</button>
   </div>
 
   <div class="lm-layout">
@@ -303,15 +439,21 @@
 </div>
 
 <!-- ═══════ PAGE: EXPRESSION ═══════ -->
-<div class="page" id="page-expression">
-  <div class="page-top">
-    <div>
-      <div class="breadcrumb">Pipeline <span class="bc-sep">/</span> <span class="bc-active">Expression Manipulation</span></div>
-      <h1>Expression Transformation</h1>
-    </div>
-    <div class="page-top-actions">
-      <button class="btn btn-outline btn-sm" id="btnSaveExpr">💾 Save Image</button>
-    </div>
+<div class="page" id="page-expression" style="position:relative">
+
+  <div class="hero-bg" aria-hidden="true">
+    <div class="hero-orb hero-orb-1" style="background:radial-gradient(circle,rgba(244,114,182,0.12),transparent 70%);width:400px;height:400px;top:-90px;right:5%"></div>
+    <div class="hero-orb hero-orb-2" style="background:radial-gradient(circle,rgba(139,92,246,0.08),transparent 70%);width:340px;height:340px;bottom:0;left:3%"></div>
+    <svg class="hero-grid" xmlns="http://www.w3.org/2000/svg"><defs><pattern id="hgrid-ex" width="40" height="40" patternUnits="userSpaceOnUse"><path d="M 40 0 L 0 0 0 40" fill="none" stroke="rgba(244,114,182,0.04)" stroke-width="1"/></pattern></defs><rect width="100%" height="100%" fill="url(#hgrid-ex)"/></svg>
+  </div>
+
+  <div class="hero-header hero-header-sm">
+    <div class="hero-badge"><span class="hero-badge-dot" style="background:#f472b6;box-shadow:0 0 8px rgba(244,114,182,0.85)"></span>Step 4 &middot; Expression Warping</div>
+    <h1 class="hero-title hero-title-sm">Expression <span class="hero-grad">Warp</span> Engine</h1>
+    <p class="hero-subtitle">Real-time facial expression manipulation via landmark-driven mesh deformation.</p>
+  </div>
+  <div class="page-act-row">
+    <button class="btn btn-outline btn-sm" id="btnSaveExpr">💾 Save Image</button>
   </div>
 
   <div class="expr-layout">
@@ -418,15 +560,21 @@
 </div>
 
 <!-- ═══════ PAGE: AGING ═══════ -->
-<div class="page" id="page-aging">
-  <div class="page-top">
-    <div>
-      <div class="breadcrumb">Pipeline <span class="bc-sep">/</span> <span class="bc-active">Aging Simulation</span></div>
-      <h1>Aging &amp; De-Aging</h1>
-    </div>
-    <div class="page-top-actions">
-      <button class="btn btn-outline btn-sm">💾 Save Image</button>
-    </div>
+<div class="page" id="page-aging" style="position:relative">
+
+  <div class="hero-bg" aria-hidden="true">
+    <div class="hero-orb hero-orb-1" style="background:radial-gradient(circle,rgba(245,158,11,0.13),transparent 70%);width:400px;height:400px;top:-90px;right:5%"></div>
+    <div class="hero-orb hero-orb-2" style="background:radial-gradient(circle,rgba(239,68,68,0.07),transparent 70%);width:320px;height:320px;bottom:0;left:3%"></div>
+    <svg class="hero-grid" xmlns="http://www.w3.org/2000/svg"><defs><pattern id="hgrid-ag" width="40" height="40" patternUnits="userSpaceOnUse"><path d="M 40 0 L 0 0 0 40" fill="none" stroke="rgba(245,158,11,0.04)" stroke-width="1"/></pattern></defs><rect width="100%" height="100%" fill="url(#hgrid-ag)"/></svg>
+  </div>
+
+  <div class="hero-header hero-header-sm">
+    <div class="hero-badge"><span class="hero-badge-dot" style="background:#fbbf24;box-shadow:0 0 8px rgba(251,191,36,0.85)"></span>Step 5 &middot; Age Simulation</div>
+    <h1 class="hero-title hero-title-sm">Temporal <span class="hero-grad">Aging</span> Model</h1>
+    <p class="hero-subtitle">Frequency-domain and AI-driven facial aging simulation across a &plusmn;50 year range.</p>
+  </div>
+  <div class="page-act-row">
+    <button class="btn btn-outline btn-sm">💾 Save Image</button>
   </div>
 
   <div class="expr-layout">
@@ -595,16 +743,22 @@
 </div>
 
 <!-- ═══════ PAGE: ANALYSIS ═══════ -->
-<div class="page" id="page-analysis">
-  <div class="page-top">
-    <div>
-      <div class="breadcrumb">Pipeline <span class="bc-sep">/</span> <span class="bc-active">Analysis</span></div>
-      <h1>Frequency &amp; Quality Analysis</h1>
-    </div>
-    <div class="page-top-actions">
-      <button class="btn btn-outline btn-sm btn-green">⤓ Export CSV</button>
-      <button class="btn btn-outline btn-sm btn-green">⤓ Export PDF</button>
-    </div>
+<div class="page" id="page-analysis" style="position:relative">
+
+  <div class="hero-bg" aria-hidden="true">
+    <div class="hero-orb hero-orb-1" style="background:radial-gradient(circle,rgba(6,182,212,0.13),transparent 70%);width:420px;height:420px;top:-100px;right:6%"></div>
+    <div class="hero-orb hero-orb-2" style="background:radial-gradient(circle,rgba(16,185,129,0.08),transparent 70%);width:340px;height:340px;bottom:0;left:3%"></div>
+    <svg class="hero-grid" xmlns="http://www.w3.org/2000/svg"><defs><pattern id="hgrid-an" width="40" height="40" patternUnits="userSpaceOnUse"><path d="M 40 0 L 0 0 0 40" fill="none" stroke="rgba(6,182,212,0.04)" stroke-width="1"/></pattern></defs><rect width="100%" height="100%" fill="url(#hgrid-an)"/></svg>
+  </div>
+
+  <div class="hero-header hero-header-sm">
+    <div class="hero-badge"><span class="hero-badge-dot" style="background:#22d3ee;box-shadow:0 0 8px rgba(34,211,238,0.85)"></span>Step 6 &middot; Signal Analysis</div>
+    <h1 class="hero-title hero-title-sm">Frequency <span class="hero-grad">Analysis</span></h1>
+    <p class="hero-subtitle">FFT-based spectral analysis and quality metric comparison between original and transformed images.</p>
+  </div>
+  <div class="page-act-row">
+    <button class="btn btn-outline btn-sm btn-green">⤓ Export CSV</button>
+    <button class="btn btn-outline btn-sm btn-green">⤓ Export PDF</button>
   </div>
 
   <div class="card">
