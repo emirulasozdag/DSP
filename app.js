@@ -198,7 +198,7 @@ function updateApparentAge(offset){
   if(el) el.textContent = transformed;
   const lbl = $('#ageOffsetLabel');
   if(lbl){
-    if(offset === 0) lbl.textContent = 'Transformed';
+    if(offset === 0) lbl.textContent = '0 Years';
     else if(offset > 0) lbl.textContent = `+${offset} Years`;
     else lbl.textContent = `${offset} Years`;
   }
@@ -316,10 +316,11 @@ if($('#btnApplyExpr')) $('#btnApplyExpr').addEventListener('click', function(){
 });
 
 if($('#btnSimulate')) $('#btnSimulate').addEventListener('click', function(){
-  this.textContent = '⧗ Processing...';
+  const span = this.querySelector('span') || this;
+  span.textContent = '⧗ Processing...';
   this.disabled = true;
   toast('Aging simulation applied!','success');
-  setTimeout(() => { this.textContent = '▶ Simulate'; this.disabled = false; }, 1600);
+  setTimeout(() => { span.textContent = 'Apply Aging Effect'; this.disabled = false; }, 1600);
 });
 
 /* ═══════════════════ AGING PAGE SAVE ═══════════════════ */
