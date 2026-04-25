@@ -409,7 +409,8 @@
             </div>
             <div class="pp-input-row">
               <div class="pp-thumb">
-                <div class="pp-thumb-placeholder">
+                <img id="ppThumbImg" src="" alt="Input preview" style="display:none;width:100%;height:100%;object-fit:cover" />
+                <div class="pp-thumb-placeholder" id="ppThumbPlaceholder">
                   <svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="var(--ink-dim)" stroke-width="1.5"
                     stroke-linecap="round" stroke-linejoin="round">
                     <rect x="3" y="3" width="18" height="18" rx="2" />
@@ -423,15 +424,15 @@
                 <div class="pp-meta-grid">
                   <div>
                     <div class="pp-meta-label">Dimensions</div>
-                    <div class="pp-meta-val">1024 × 1024</div>
+                    <div class="pp-meta-val" id="ppDim">1024 × 1024</div>
                   </div>
                   <div>
                     <div class="pp-meta-label">File Size</div>
-                    <div class="pp-meta-val">2.4 MB</div>
+                    <div class="pp-meta-val" id="ppFSize">2.4 MB</div>
                   </div>
                   <div>
                     <div class="pp-meta-label">Format</div>
-                    <div class="pp-meta-val">JPEG</div>
+                    <div class="pp-meta-val" id="ppFFormat">JPEG</div>
                   </div>
                   <div>
                     <div class="pp-meta-label">Faces</div>
@@ -1011,6 +1012,30 @@
         <!-- ── Right panel ── -->
         <div class="lm-side">
 
+          <div class="card" style="padding:14px">
+            <div class="card-head" style="margin-bottom:10px">
+              <h3 style="font-size:0.82rem">Pipeline Input</h3>
+              <span class="tag">Preview</span>
+            </div>
+            <div class="pp-input-row" style="align-items:center">
+              <div class="pp-thumb" style="width:64px;height:64px">
+                <img id="lmThumbImg" src="" alt="Landmark input" style="display:none;width:100%;height:100%;object-fit:cover" />
+                <div class="pp-thumb-placeholder" id="lmThumbPlaceholder">
+                  <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="var(--ink-dim)" stroke-width="1.5"
+                    stroke-linecap="round" stroke-linejoin="round">
+                    <rect x="3" y="3" width="18" height="18" rx="2" />
+                    <circle cx="8.5" cy="8.5" r="1.5" />
+                    <path d="M21 15l-5-5L5 21" />
+                  </svg>
+                </div>
+              </div>
+              <div style="min-width:0;flex:1">
+                <div class="pp-meta-name" id="lmFileName" style="margin-bottom:2px">portrait_01.jpg</div>
+                <div class="pp-meta-label">Current working image</div>
+              </div>
+            </div>
+          </div>
+
           <!-- Accuracy ring card -->
           <div class="card" style="padding:18px 16px">
             <div class="card-head" style="justify-content:center;margin-bottom:14px">
@@ -1222,6 +1247,24 @@
         <div class="card expr-controls">
           <div class="card-head">
             <h3>Parameters</h3><button class="btn btn-ghost btn-xs" id="btnResetExpr">Reset</button>
+          </div>
+
+          <div class="pp-input-row" style="margin-bottom:14px;align-items:center">
+            <div class="pp-thumb" style="width:58px;height:58px">
+              <img id="exprThumbImg" src="" alt="Expression input" style="display:none;width:100%;height:100%;object-fit:cover" />
+              <div class="pp-thumb-placeholder" id="exprThumbPlaceholder">
+                <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="var(--ink-dim)" stroke-width="1.5"
+                  stroke-linecap="round" stroke-linejoin="round">
+                  <rect x="3" y="3" width="18" height="18" rx="2" />
+                  <circle cx="8.5" cy="8.5" r="1.5" />
+                  <path d="M21 15l-5-5L5 21" />
+                </svg>
+              </div>
+            </div>
+            <div style="min-width:0;flex:1">
+              <div class="pp-meta-name" id="exprFileName" style="margin-bottom:2px">portrait_01.jpg</div>
+              <div class="pp-meta-label">Image used for expression warp</div>
+            </div>
           </div>
 
           <!-- Smile Enhancement -->
@@ -1523,7 +1566,7 @@
         </p>
       </div>
       <div class="page-act-row">
-        <button class="btn btn-outline btn-sm">
+        <button class="btn btn-outline btn-sm" id="btnSaveAging">
           <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"
             stroke-linecap="round" stroke-linejoin="round">
             <path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4" />
@@ -1532,7 +1575,7 @@
           </svg>
           Save Image
         </button>
-        <button class="btn btn-outline btn-sm">
+        <button class="btn btn-outline btn-sm" id="btnCompareAging">
           <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"
             stroke-linecap="round" stroke-linejoin="round">
             <polyline points="16 17 21 12 16 7" />
@@ -1894,7 +1937,7 @@
           </svg>
           Export CSV
         </button>
-        <button class="btn btn-outline btn-sm">
+        <button class="btn btn-outline btn-sm" id="btnAnalysisPdf">
           <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"
             stroke-linecap="round" stroke-linejoin="round">
             <path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z" />
@@ -1966,30 +2009,30 @@
           <div class="an-energy-row">
             <div class="card energy-card">
               <div class="en-label">Total Spectral Energy</div>
-              <div class="en-val">9.42 <small>×10⁷</small></div>
+              <div class="en-val" id="enTotal">9.42 <small>×10⁷</small></div>
               <div class="en-bar">
-                <div class="en-fill" style="width:100%;background:var(--purple)"></div>
+                <div class="en-fill" id="enFillTotal" style="width:100%;background:var(--purple)"></div>
               </div>
             </div>
             <div class="card energy-card">
               <div class="en-label">HF Energy</div>
-              <div class="en-val">4.8 <small>×10⁶</small></div>
+              <div class="en-val" id="enHF">4.8 <small>×10⁶</small></div>
               <div class="en-bar">
-                <div class="en-fill" style="width:50%;background:var(--rose)"></div>
+                <div class="en-fill" id="enFillHF" style="width:50%;background:var(--rose)"></div>
               </div>
             </div>
             <div class="card energy-card">
               <div class="en-label">LF Energy</div>
-              <div class="en-val">8.9 <small>×10⁷</small></div>
+              <div class="en-val" id="enLF">8.9 <small>×10⁷</small></div>
               <div class="en-bar">
-                <div class="en-fill" style="width:90%;background:var(--cyan)"></div>
+                <div class="en-fill" id="enFillLF" style="width:90%;background:var(--cyan)"></div>
               </div>
             </div>
             <div class="card energy-card">
               <div class="en-label">HF / LF Ratio</div>
-              <div class="en-val">0.054</div>
+              <div class="en-val" id="enRatio">0.054</div>
               <div class="en-bar">
-                <div class="en-fill" style="width:18%;background:var(--amber)"></div>
+                <div class="en-fill" id="enFillRatio" style="width:18%;background:var(--amber)"></div>
               </div>
             </div>
           </div>
@@ -2007,7 +2050,7 @@
               <div class="qm-ring">
                 <svg viewBox="0 0 100 100">
                   <circle cx="50" cy="50" r="42" fill="none" stroke="rgba(255,255,255,.05)" stroke-width="6" />
-                  <circle cx="50" cy="50" r="42" fill="none" stroke="url(#gMSE)" stroke-width="6"
+                  <circle cx="50" cy="50" r="42" fill="none" stroke="url(#gMSE)" stroke-width="6" id="qmMseRing"
                     stroke-dasharray="92 172" stroke-dashoffset="0" stroke-linecap="round"
                     transform="rotate(-90 50 50)" />
                   <defs>
@@ -2017,16 +2060,16 @@
                     </linearGradient>
                   </defs>
                 </svg>
-                <span>35%</span>
+                <span id="qmMsePct">35%</span>
               </div>
               <div class="qm-label">MSE</div>
-              <div class="qm-val">124.38</div>
+              <div class="qm-val" id="qmMseVal">124.38</div>
             </div>
             <div class="qm-card">
               <div class="qm-ring">
                 <svg viewBox="0 0 100 100">
                   <circle cx="50" cy="50" r="42" fill="none" stroke="rgba(255,255,255,.05)" stroke-width="6" />
-                  <circle cx="50" cy="50" r="42" fill="none" stroke="url(#gPSNR)" stroke-width="6"
+                  <circle cx="50" cy="50" r="42" fill="none" stroke="url(#gPSNR)" stroke-width="6" id="qmPsnrRing"
                     stroke-dasharray="179 85" stroke-dashoffset="0" stroke-linecap="round"
                     transform="rotate(-90 50 50)" />
                   <defs>
@@ -2036,16 +2079,16 @@
                     </linearGradient>
                   </defs>
                 </svg>
-                <span>68%</span>
+                <span id="qmPsnrPct">68%</span>
               </div>
               <div class="qm-label">PSNR</div>
-              <div class="qm-val">27.19 dB</div>
+              <div class="qm-val" id="qmPsnrVal">27.19 dB</div>
             </div>
             <div class="qm-card">
               <div class="qm-ring">
                 <svg viewBox="0 0 100 100">
                   <circle cx="50" cy="50" r="42" fill="none" stroke="rgba(255,255,255,.05)" stroke-width="6" />
-                  <circle cx="50" cy="50" r="42" fill="none" stroke="url(#gSSIM)" stroke-width="6"
+                  <circle cx="50" cy="50" r="42" fill="none" stroke="url(#gSSIM)" stroke-width="6" id="qmSsimRing"
                     stroke-dasharray="225 39" stroke-dashoffset="0" stroke-linecap="round"
                     transform="rotate(-90 50 50)" />
                   <defs>
@@ -2055,10 +2098,10 @@
                     </linearGradient>
                   </defs>
                 </svg>
-                <span>85%</span>
+                <span id="qmSsimPct">85%</span>
               </div>
               <div class="qm-label">SSIM</div>
-              <div class="qm-val">0.853</div>
+              <div class="qm-val" id="qmSsimVal">0.853</div>
             </div>
           </div>
         </div><!-- /quality card -->

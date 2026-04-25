@@ -60,6 +60,49 @@ function updatePipelineStrip(page) {
 /* ═══════════════════ FILE UPLOAD ═══════════════════ */
 const dropzone = $('#dropzone'), fileInput = $('#fileInput'), browseBtn = $('#browseBtn');
 const uploadCard = $('#uploadCard'), previewCard = $('#previewCard');
+const appState = {
+  imageDataUrl: '',
+  fileName: 'portrait_01.jpg',
+  format: 'JPEG',
+  sizeText: '2.4 MB',
+  dimensions: '1024 × 1024',
+};
+
+function setPipelineImage(dataUrl, meta = {}) {
+  appState.imageDataUrl = dataUrl || appState.imageDataUrl;
+  appState.fileName = meta.fileName || appState.fileName;
+  appState.format = meta.format || appState.format;
+  appState.sizeText = meta.sizeText || appState.sizeText;
+  appState.dimensions = meta.dimensions || appState.dimensions;
+
+  const ppThumb = $('#ppThumbImg');
+  const lmThumb = $('#lmThumbImg');
+  const exprThumb = $('#exprThumbImg');
+  [ppThumb, lmThumb, exprThumb].forEach(img => {
+    if (!img) return;
+    img.src = appState.imageDataUrl;
+    img.style.display = appState.imageDataUrl ? 'block' : 'none';
+  });
+
+  const ppPh = $('#ppThumbPlaceholder');
+  const lmPh = $('#lmThumbPlaceholder');
+  const exprPh = $('#exprThumbPlaceholder');
+  [ppPh, lmPh, exprPh].forEach(ph => {
+    if (!ph) return;
+    ph.style.display = appState.imageDataUrl ? 'none' : 'grid';
+  });
+
+  const assignText = (id, val) => {
+    const el = $(id);
+    if (el) el.textContent = val;
+  };
+  assignText('#ppFileName', appState.fileName);
+  assignText('#ppDim', appState.dimensions);
+  assignText('#ppFSize', appState.sizeText);
+  assignText('#ppFFormat', appState.format);
+  assignText('#lmFileName', appState.fileName);
+  assignText('#exprFileName', appState.fileName);
+}
 
 if (browseBtn) browseBtn.addEventListener('click', e => { e.stopPropagation(); fileInput.click(); });
 if (dropzone) dropzone.addEventListener('click', () => fileInput.click());
@@ -86,6 +129,12 @@ function handleFile(file) {
       $('#pvFormat').textContent = file.type.split('/')[1].toUpperCase();
       $('#pvSize').textContent = (file.size / 1024).toFixed(1) + ' KB';
       $('#pvRes').textContent = img.width + '×' + img.height;
+      setPipelineImage(e.target.result, {
+        fileName: file.name,
+        format: file.type.split('/')[1].toUpperCase(),
+        sizeText: (file.size / (1024 * 1024)).toFixed(2) + ' MB',
+        dimensions: img.width + ' × ' + img.height,
+      });
       uploadCard.style.display = 'none';
       previewCard.style.display = 'block';
       toast('Image loaded — ready to process!', 'success');
@@ -99,6 +148,13 @@ if ($('#btnRemove')) $('#btnRemove').addEventListener('click', () => {
   uploadCard.style.display = '';
   previewCard.style.display = 'none';
   fileInput.value = '';
+  appState.imageDataUrl = '';
+  setPipelineImage('', {
+    fileName: 'portrait_01.jpg',
+    format: 'JPEG',
+    sizeText: '2.4 MB',
+    dimensions: '1024 × 1024',
+  });
 });
 if ($('#btnNext')) $('#btnNext').addEventListener('click', () => nav('preprocess'));
 
@@ -159,6 +215,8 @@ function updateExprSvg() {
       `<span>Lip: ${Math.round(lip * 100)}%</span>` +
       `<span>Slim: ${Math.round(slim * 100)}%</span>`;
   }
+
+  updateAnalysisMetrics();
 }
 
 if ($('#btnResetExpr')) $('#btnResetExpr').addEventListener('click', () => {
@@ -178,7 +236,10 @@ if (toggleMesh && meshOverlay) toggleMesh.addEventListener('change', () => {
 /* ═══════════════════ AGING SLIDERS ═══════════════════ */
 ['sAge', 'sContrast', 'sTone', 'sNoise', 'sDetail'].forEach(id => {
   const s = $(`#${id}`), v = $(`#v${id.slice(1)}`);
-  if (s && v) s.addEventListener('input', () => { v.textContent = s.value + '%'; });
+  if (s && v) s.addEventListener('input', () => {
+    v.textContent = s.value + '%';
+    updateAnalysisMetrics();
+  });
 });
 const sTargetAge = $('#sTargetAge'), vTargetAge = $('#vTargetAge');
 if (sTargetAge && vTargetAge) sTargetAge.addEventListener('input', () => {
@@ -186,6 +247,7 @@ if (sTargetAge && vTargetAge) sTargetAge.addEventListener('input', () => {
   vTargetAge.textContent = v === 0 ? '0' : (v > 0 ? '+' + v : v);
   updateApparentAge(v);
   updateAgeOffsetLabel(v);
+  updateAnalysisMetrics();
 });
 
 /* ═══════════════════ SEGMENTED CONTROLS ═══════════════════ */
@@ -197,11 +259,19 @@ $$('.seg').forEach(seg => {
       /* FR-3.4.9: show method comparison panel when AI mode is selected */
       if (seg.id === 'ageMethod') {
         const methodCompare = $('#methodCompareCard');
-        if (methodCompare) methodCompare.style.display = 'block';
+        if (methodCompare) methodCompare.style.display = (btn.dataset.v === 'ai') ? 'block' : 'none';
+        updateAnalysisMetrics();
       }
     });
   });
 });
+
+function syncMethodCompareVisibility() {
+  const methodCompare = $('#methodCompareCard');
+  const activeMethod = $('#ageMethod .seg-btn.active');
+  if (!methodCompare || !activeMethod) return;
+  methodCompare.style.display = (activeMethod.dataset.v === 'ai') ? 'block' : 'none';
+}
 
 /* ═══════════════════ APPARENT AGE (FR-3.8.2) ═══════════════════ */
 const BASE_AGE = 28;
@@ -264,6 +334,12 @@ if ($('#btnCapture')) $('#btnCapture').addEventListener('click', () => {
   $('#pvFormat').textContent = 'JPEG';
   $('#pvSize').textContent = '—';
   $('#pvRes').textContent = `${webcamCanvas.width}×${webcamCanvas.height}`;
+  setPipelineImage(dataUrl, {
+    fileName: 'webcam-capture.jpg',
+    format: 'JPEG',
+    sizeText: 'Live capture',
+    dimensions: `${webcamCanvas.width} × ${webcamCanvas.height}`,
+  });
   uploadCard.style.display = 'none';
   previewCard.style.display = 'block';
   toast('Webcam frame captured!', 'success');
@@ -315,9 +391,107 @@ if ($('#btnExportCSV')) $('#btnExportCSV').addEventListener('click', () => {
   download('landmarks.csv', csv, 'text/csv');
 });
 
-/* ═══════════════════ SAVE IMAGE STUB ═══════════════════ */
+if ($('#btnExportJSON')) $('#btnExportJSON').addEventListener('click', () => {
+  const points = Array.from($$('#ptsG circle')).map((c, i) => ({
+    index: i,
+    x: Number(c.getAttribute('cx')),
+    y: Number(c.getAttribute('cy')),
+  }));
+  download('landmarks.json', JSON.stringify({ pointCount: points.length, points }, null, 2), 'application/json');
+  toast('Landmark JSON exported.', 'success');
+});
+
+if ($('#btnRunPP')) $('#btnRunPP').addEventListener('click', () => {
+  const conf = Number($('#sliderConf')?.value || 85) / 100;
+  const pad = Number($('#sliderPad')?.value || 20);
+  toast(`Preprocessing completed (conf ${conf.toFixed(2)}, pad ${pad}%).`, 'success');
+});
+
+if ($('#btnResetPP')) $('#btnResetPP').addEventListener('click', () => {
+  const conf = $('#sliderConf');
+  const pad = $('#sliderPad');
+  if (conf) {
+    conf.value = 85;
+    $('#confVal').textContent = '0.85';
+  }
+  if (pad) {
+    pad.value = 20;
+    $('#padVal').textContent = '20%';
+  }
+  const res = $('#selectResize');
+  if (res) res.value = '256';
+  const normBtns = $('#segNorm')?.querySelectorAll('.seg-btn') || [];
+  normBtns.forEach(btn => btn.classList.remove('active'));
+  const normDefault = $('#segNorm .seg-btn[data-val="1"]');
+  if (normDefault) normDefault.classList.add('active');
+  toast('Preprocessing controls reset.', 'info');
+});
+
+/* ═══════════════════ IMAGE EXPORTS (UI) ═══════════════════ */
+function drawSvgToCanvas(svgEl, done) {
+  if (!svgEl) return;
+  const rect = svgEl.getBoundingClientRect();
+  const width = Math.max(1, Math.round(rect.width || svgEl.viewBox.baseVal.width || 800));
+  const height = Math.max(1, Math.round(rect.height || svgEl.viewBox.baseVal.height || 600));
+  const clone = svgEl.cloneNode(true);
+  clone.setAttribute('xmlns', 'http://www.w3.org/2000/svg');
+  if (!clone.getAttribute('width')) clone.setAttribute('width', String(width));
+  if (!clone.getAttribute('height')) clone.setAttribute('height', String(height));
+
+  const svgData = new XMLSerializer().serializeToString(clone);
+  const svgBlob = new Blob([svgData], { type: 'image/svg+xml;charset=utf-8' });
+  const url = URL.createObjectURL(svgBlob);
+  const img = new Image();
+
+  img.onload = () => {
+    const canvas = document.createElement('canvas');
+    canvas.width = width;
+    canvas.height = height;
+    const ctx = canvas.getContext('2d');
+    ctx.fillStyle = '#0b1220';
+    ctx.fillRect(0, 0, width, height);
+    ctx.drawImage(img, 0, 0, width, height);
+    URL.revokeObjectURL(url);
+    done(canvas);
+  };
+  img.onerror = () => {
+    URL.revokeObjectURL(url);
+    toast('Image export failed.', 'error');
+  };
+  img.src = url;
+}
+
+function saveSvgAsPng(svgEl, fileName) {
+  drawSvgToCanvas(svgEl, canvas => {
+    canvas.toBlob(blob => {
+      if (!blob) {
+        toast('Image export failed.', 'error');
+        return;
+      }
+      const a = document.createElement('a');
+      a.href = URL.createObjectURL(blob);
+      a.download = fileName;
+      a.click();
+      URL.revokeObjectURL(a.href);
+      toast('Image saved to downloads.', 'success');
+    }, 'image/png');
+  });
+}
+
 if ($('#btnSaveExpr')) $('#btnSaveExpr').addEventListener('click', () => {
-  toast('Image saved to downloads.', 'success');
+  saveSvgAsPng($('#exprSvg'), 'expression-result.png');
+});
+
+if ($('#btnSaveAging')) $('#btnSaveAging').addEventListener('click', () => {
+  const agingSvg = $('#page-aging .aging-side-card-active .face-svg');
+  saveSvgAsPng(agingSvg, 'aging-result.png');
+});
+
+if ($('#btnCompareAging')) $('#btnCompareAging').addEventListener('click', () => {
+  const compareCard = $('#methodCompareCard');
+  if (!compareCard) return;
+  compareCard.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  toast('Scrolled to comparison panel.', 'info');
 });
 
 /* ═══════════════════ APPLY WARP FEEDBACK ═══════════════════ */
@@ -333,13 +507,114 @@ if ($('#btnSimulate')) $('#btnSimulate').addEventListener('click', function () {
   span.textContent = '⧗ Processing...';
   this.disabled = true;
   toast('Aging simulation applied!', 'success');
-  setTimeout(() => { span.textContent = 'Apply Aging Effect'; this.disabled = false; }, 1600);
+  setTimeout(() => {
+    span.textContent = 'Apply Aging Effect';
+    this.disabled = false;
+    updateAnalysisMetrics();
+  }, 1600);
 });
 
-/* ═══════════════════ AGING PAGE SAVE ═══════════════════ */
-$$('.page-top-actions .btn-outline').forEach(btn => {
-  if (btn.textContent.includes('Save')) btn.addEventListener('click', () => toast('Image saved to downloads.', 'success'));
+if ($('#btnAnalysisCsv')) $('#btnAnalysisCsv').addEventListener('click', () => {
+  const rows = [
+    ['metric', 'value'],
+    ['MSE', ($('#qmMseVal')?.textContent || '').trim()],
+    ['PSNR', ($('#qmPsnrVal')?.textContent || '').trim()],
+    ['SSIM', ($('#qmSsimVal')?.textContent || '').trim()],
+    ['HF/LF', ($('#enRatio')?.textContent || '').trim()],
+  ];
+  const csv = rows.map(r => r.join(',')).join('\n');
+  download('analysis-metrics.csv', csv, 'text/csv');
+  toast('Analysis CSV exported.', 'success');
 });
+
+if ($('#btnAnalysisPdf')) $('#btnAnalysisPdf').addEventListener('click', () => {
+  const lines = [
+    'FaceWarp DSP - Analysis Report',
+    `Timestamp: ${new Date().toLocaleString()}`,
+    '',
+    `MSE: ${($('#qmMseVal')?.textContent || '').trim()}`,
+    `PSNR: ${($('#qmPsnrVal')?.textContent || '').trim()}`,
+    `SSIM: ${($('#qmSsimVal')?.textContent || '').trim()}`,
+    `HF/LF Ratio: ${($('#enRatio')?.textContent || '').trim()}`,
+  ];
+  downloadSimplePdf('analysis-report.pdf', lines);
+  toast('Analysis PDF exported.', 'success');
+});
+
+const specMode = $('#specMode');
+if (specMode) {
+  specMode.querySelectorAll('.seg-btn').forEach(btn => {
+    btn.addEventListener('click', () => {
+      const isPhase = btn.dataset.v === 'phase';
+      const titles = $$('#page-analysis .spec-title');
+      if (titles[0]) titles[0].textContent = isPhase ? 'Original (Phase)' : 'Original';
+      if (titles[1]) titles[1].textContent = isPhase ? 'Transformed (Phase)' : 'Transformed';
+      toast(isPhase ? 'Phase spectrum view enabled.' : 'Magnitude spectrum view enabled.', 'info');
+    });
+  });
+}
+
+function clamp(v, min, max) {
+  return Math.max(min, Math.min(max, v));
+}
+
+function setRingProgress(el, percent) {
+  if (!el) return;
+  const circumference = 263.9;
+  const p = clamp(percent, 0, 100);
+  el.setAttribute('stroke-dasharray', `${(circumference * p / 100).toFixed(1)} ${circumference}`);
+}
+
+function updateAnalysisMetrics() {
+  const exprAverage = (
+    Number($('#sSmile')?.value || 0) +
+    Number($('#sBrow')?.value || 0) +
+    Number($('#sLip')?.value || 0) +
+    Number($('#sSlim')?.value || 0)
+  ) / 4 / 100;
+  const ageShift = Math.abs(Number($('#sTargetAge')?.value || 0)) / 50;
+  const ageStrength = Number($('#sAge')?.value || 50) / 100;
+  const intensity = clamp(0.12 + exprAverage * 0.38 + ageShift * 0.26 + ageStrength * 0.24, 0, 1);
+
+  const mse = 40 + intensity * 170;
+  const psnr = 36 - intensity * 12;
+  const ssim = 0.95 - intensity * 0.24;
+
+  const hf = 3.0 + intensity * 4.8;
+  const lf = 9.4 - intensity * 1.7;
+  const ratio = hf / (lf * 10);
+  const total = lf + hf / 10;
+
+  const msePct = clamp((mse - 30) / 2, 5, 98);
+  const psnrPct = clamp(((psnr - 18) / 18) * 100, 5, 98);
+  const ssimPct = clamp(ssim * 100, 5, 98);
+
+  if ($('#qmMsePct')) $('#qmMsePct').textContent = `${Math.round(msePct)}%`;
+  if ($('#qmPsnrPct')) $('#qmPsnrPct').textContent = `${Math.round(psnrPct)}%`;
+  if ($('#qmSsimPct')) $('#qmSsimPct').textContent = `${Math.round(ssimPct)}%`;
+
+  if ($('#qmMseVal')) $('#qmMseVal').textContent = mse.toFixed(2);
+  if ($('#qmPsnrVal')) $('#qmPsnrVal').textContent = `${psnr.toFixed(2)} dB`;
+  if ($('#qmSsimVal')) $('#qmSsimVal').textContent = ssim.toFixed(3);
+
+  if ($('#enTotal')) $('#enTotal').innerHTML = `${total.toFixed(2)} <small>×10⁷</small>`;
+  if ($('#enHF')) $('#enHF').innerHTML = `${hf.toFixed(1)} <small>×10⁶</small>`;
+  if ($('#enLF')) $('#enLF').innerHTML = `${lf.toFixed(1)} <small>×10⁷</small>`;
+  if ($('#enRatio')) $('#enRatio').textContent = ratio.toFixed(3);
+
+  if ($('#enFillTotal')) $('#enFillTotal').style.width = `${clamp(total / 10 * 100, 20, 100)}%`;
+  if ($('#enFillHF')) $('#enFillHF').style.width = `${clamp(hf / 8 * 100, 10, 100)}%`;
+  if ($('#enFillLF')) $('#enFillLF').style.width = `${clamp(lf / 10 * 100, 20, 100)}%`;
+  if ($('#enFillRatio')) $('#enFillRatio').style.width = `${clamp(ratio / 0.12 * 100, 5, 100)}%`;
+
+  setRingProgress($('#qmMseRing'), msePct);
+  setRingProgress($('#qmPsnrRing'), psnrPct);
+  setRingProgress($('#qmSsimRing'), ssimPct);
+}
+
+setPipelineImage('');
+updateAnalysisMetrics();
+syncMethodCompareVisibility();
 
 function download(name, content, type) {
   const blob = new Blob([content], { type });
@@ -348,6 +623,49 @@ function download(name, content, type) {
   a.download = name;
   a.click();
   URL.revokeObjectURL(a.href);
+}
+
+function pdfEscape(text) {
+  return String(text).replace(/\\/g, '\\\\').replace(/\(/g, '\\(').replace(/\)/g, '\\)');
+}
+
+function downloadSimplePdf(fileName, lines) {
+  const streamLines = (lines || []).map((line, i) => {
+    const y = 800 - i * 18;
+    return `BT /F1 12 Tf 50 ${y} Td (${pdfEscape(line)}) Tj ET`;
+  }).join('\n');
+
+  const obj1 = '1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj\n';
+  const obj2 = '2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 >> endobj\n';
+  const obj3 = '3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] /Resources << /Font << /F1 5 0 R >> >> /Contents 4 0 R >> endobj\n';
+  const stream = `${streamLines}\n`;
+  const obj4 = `4 0 obj << /Length ${stream.length} >> stream\n${stream}endstream endobj\n`;
+  const obj5 = '5 0 obj << /Type /Font /Subtype /Type1 /BaseFont /Helvetica >> endobj\n';
+
+  const parts = ['%PDF-1.4\n', obj1, obj2, obj3, obj4, obj5];
+  const offsets = [];
+  let cursor = 0;
+  for (const part of parts) {
+    offsets.push(cursor);
+    cursor += part.length;
+  }
+
+  const xrefStart = cursor;
+  const xref = [
+    'xref\n',
+    '0 6\n',
+    '0000000000 65535 f \n',
+    `${String(offsets[1]).padStart(10, '0')} 00000 n \n`,
+    `${String(offsets[2]).padStart(10, '0')} 00000 n \n`,
+    `${String(offsets[3]).padStart(10, '0')} 00000 n \n`,
+    `${String(offsets[4]).padStart(10, '0')} 00000 n \n`,
+    `${String(offsets[5]).padStart(10, '0')} 00000 n \n`,
+    'trailer << /Size 6 /Root 1 0 R >>\n',
+    `startxref\n${xrefStart}\n%%EOF`,
+  ].join('');
+
+  const pdfContent = parts.join('') + xref;
+  download(fileName, pdfContent, 'application/pdf');
 }
 
 /* ═══════════════════ BUTTON RIPPLE ═══════════════════ */
