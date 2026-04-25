@@ -3596,3 +3596,163 @@ textarea {
 .mesh-sw input:checked+.sw-track::after {
   transform: translateX(13px) !important;
 }
+/* ════════════════════════════════════════════════════════════════
+   AGING WORKSPACE — Color Harmonisation (Deep Blue + Cyan/Teal)
+   Scoped overrides: DO NOT affect other modules
+   ════════════════════════════════════════════════════════════════ */
+
+/* 1. Primary action button — deep navy → vibrant blue gradient */
+.aging-apply-btn {
+  background: linear-gradient(135deg, #1E3A8A 0%, #2563EB 55%, #3B82F6 100%) !important;
+  box-shadow: 0 6px 22px rgba(37, 99, 235, 0.35) !important;
+  font-weight: 700;
+  color: #fff !important;
+}
+.aging-apply-btn:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 12px 32px rgba(37, 99, 235, 0.50) !important;
+  background: linear-gradient(135deg, #1e40af 0%, #1d4ed8 55%, #2563EB 100%) !important;
+}
+.aging-apply-btn:active {
+  transform: translateY(0);
+  box-shadow: 0 4px 14px rgba(37, 99, 235, 0.35) !important;
+}
+
+/* 2. Aging panel slider thumbs — cyan/teal to match project accent */
+#page-aging .slider::-webkit-slider-thumb {
+  background: #06B6D4 !important;
+  border-color: var(--bg) !important;
+  box-shadow: 0 0 12px rgba(6, 182, 212, 0.65) !important;
+}
+#page-aging .slider::-moz-range-thumb {
+  background: #06B6D4 !important;
+  box-shadow: 0 0 12px rgba(6, 182, 212, 0.65) !important;
+}
+/* Bipolar (Years to Simulate) thumb already uses --cyan; boost its glow */
+#page-aging .slider-bipolar::-webkit-slider-thumb {
+  background: #06B6D4 !important;
+  box-shadow: 0 0 14px rgba(6, 182, 212, 0.75) !important;
+}
+#page-aging .slider-bipolar::-moz-range-thumb {
+  background: #06B6D4 !important;
+}
+
+/* 3a. "+10 Years" delta badge → cyan */
+.aging-result-delta {
+  color: #06B6D4;
+  background: rgba(6, 182, 212, 0.1);
+  border-color: rgba(6, 182, 212, 0.28);
+}
+
+/* 3b. Simulated age number ("38") → cyan */
+.aging-result-age-sim {
+  color: #06B6D4;
+  text-shadow: 0 0 28px rgba(6, 182, 212, 0.32);
+}
+
+/* 3c. age-badge strong values (e.g. "36 yrs", projected) → cyan */
+.age-badge strong {
+  color: #06B6D4;
+}
+
+/* 4. Method selector active button (Direction + Method segs in aging) */
+#page-aging #ageMethod .seg-btn.active,
+#page-aging #ageMode .seg-btn.active {
+  background: linear-gradient(135deg, #1D4ED8, #06B6D4);
+  box-shadow: 0 3px 12px rgba(6, 182, 212, 0.30);
+  color: #fff;
+}
+
+/* Supporting: ctrl-header icon accent → deep blue */
+.aging-ctrl-icon {
+  background: rgba(29, 78, 216, 0.1);
+  border-color: rgba(29, 78, 216, 0.25);
+  color: #3B82F6;
+}
+
+/* ctrl-header subtle tint → blue instead of amber */
+.aging-ctrl-header {
+  background: rgba(29, 78, 216, 0.035);
+}
+
+/* Active "after" side card bg */
+.aging-face-wrap-active {
+  background: rgba(6, 182, 212, 0.025);
+  border-color: rgba(6, 182, 212, 0.22);
+  box-shadow: 0 0 28px rgba(6, 182, 212, 0.06) inset;
+}
+
+/* Live indicator dot & badge dot → cyan */
+.aging-side-dot-after {
+  background: #06B6D4;
+  box-shadow: 0 0 8px rgba(6, 182, 212, 0.8);
+}
+.aging-badge-dot {
+  background: #06B6D4;
+  box-shadow: 0 0 7px rgba(6, 182, 212, 0.8);
+}
+
+/* "After" side card header text → cyan */
+.aging-side-header-active {
+  color: #06B6D4 !important;
+}
+
+/* Active side card background tint */
+.aging-side-card-active {
+  background: rgba(6, 182, 212, 0.03);
+}
+
+/* ═══ AGING TITLE + WIREFRAME SVGs: amber → cyan/blue [patch] ════════ */
+
+/* 1. Hero title "Aging" word */
+.aging-hero-grad {
+  background: linear-gradient(135deg, #06B6D4 0%, #3B82F6 100%) !important;
+  -webkit-background-clip: text !important;
+  -webkit-text-fill-color: transparent !important;
+  background-clip: text !important;
+}
+
+/* 2. Face outline ellipse (first child of each SVG) */
+#page-aging .aging-face-wrap .face-svg ellipse:first-child {
+  stroke: rgba(6, 182, 212, 0.20) !important;
+  fill: rgba(6, 182, 212, 0.03) !important;
+}
+
+/* 3. Eye ellipses (non-first-child ellipses) */
+#page-aging .aging-face-wrap .face-svg ellipse:not(:first-child) {
+  stroke: rgba(6, 182, 212, 0.70) !important;
+  fill: none !important;
+}
+
+/* 4. All paths (brow, nose, wrinkle, mouth lines) */
+#page-aging .aging-face-wrap .face-svg path {
+  stroke: rgba(6, 182, 212, 0.32) !important;
+}
+
+/* ═══ EXPRESSION: Parameters panel elevation fix ════════════════════ */
+.expr-controls {
+  background: #1E293B !important;
+  border: 1px solid rgba(255, 255, 255, 0.07) !important;
+  border-radius: 16px !important;
+  padding: 22px 24px !important;
+  box-shadow:
+    0 1px 3px rgba(0, 0, 0, 0.45),
+    0 8px 32px rgba(0, 0, 0, 0.30),
+    0 0 0 1px rgba(6, 182, 212, 0.05) inset !important;
+}
+
+/* ═══ PREPROCESSING: hero title accent → cyan [palette standardization] */
+#page-preprocess .hero-grad {
+  background: #06B6D4 !important;
+  -webkit-background-clip: text !important;
+  -webkit-text-fill-color: transparent !important;
+  background-clip: text !important;
+}
+
+/* ═══ ANALYSIS: hero title accent → cyan [palette standardization] */
+#page-analysis .an-hero-grad {
+  background: #06B6D4;
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  background-clip: text;
+}
