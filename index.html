@@ -1179,6 +1179,11 @@
         </div>
       </div>
 
+      <div class="page-nav">
+        <button class="btn btn-ghost" onclick="nav('preprocess')">&#x2190; Back to Preprocessing</button>
+        <button class="btn btn-primary" onclick="nav('expression')">Expression Warping &#x2192;</button>
+      </div>
+
     </div>
 
 
@@ -1482,6 +1487,10 @@
         </div>
       </div>
 
+      <div class="page-nav">
+        <button class="btn btn-ghost" onclick="nav('landmarks')">&#x2190; Back to Landmarks</button>
+        <button class="btn btn-primary" onclick="nav('aging')">Aging Simulation &#x2192;</button>
+      </div>
 
     </div>
 
@@ -2059,11 +2068,11 @@
       <!-- Full-width: Detailed Comparison -->
       <div class="card" style="margin-top:18px">
         <div class="card-head">
-          <h3>Sonuç Özeti</h3>
-          <span class="tag">6 Ölçüm</span>
+          <h3>Quantitative Results Overview</h3>
+          <span class="tag">6 METRICS</span>
         </div>
-        <p style="font-size:0.78rem;color:var(--ink-soft);margin-bottom:16px;line-height:1.6">Yaşlandırma işleminin
-          görüntüyü nasıl değiştirdiğini her kart ayrı ayrı gösteriyor. Önce ve sonra değerleri karşılaştırılıyor.</p>
+        <p style="font-size:0.78rem;color:var(--ink-soft);margin-bottom:16px;line-height:1.6">Detailed breakdown of
+          transformation effects. Compares original and processed image metrics.</p>
 
         <div class="mc-grid">
 
@@ -2080,27 +2089,27 @@
                 </svg>
               </div>
               <div>
-                <div class="mc-title">Piksel Farkı</div>
-                <div class="mc-sub">İki görüntü arasındaki toplam renk değeri farkı</div>
+                <div class="mc-title">Pixel Variance (MSE)</div>
+                <div class="mc-sub">Absolute color value difference between the images.</div>
               </div>
             </div>
             <div class="mc-bars">
               <div class="mc-bar-row">
-                <span class="mc-lbl">Önce</span>
+                <span class="mc-lbl">BEFORE</span>
                 <div class="mc-track">
                   <div class="mc-fill" style="width:2%;background:var(--emerald)"></div>
                 </div>
                 <span class="mc-num">≈ 0</span>
               </div>
               <div class="mc-bar-row">
-                <span class="mc-lbl">Sonra</span>
+                <span class="mc-lbl">AFTER</span>
                 <div class="mc-track">
                   <div class="mc-fill" style="width:62%;background:var(--rose)"></div>
                 </div>
                 <span class="mc-num">124.38</span>
               </div>
             </div>
-            <div class="mc-verdict mc-v-changed">Yaşlandırma etkisi görünür</div>
+            <div class="mc-verdict mc-v-changed">Transformation effect visible</div>
           </div>
 
           <!-- Görüntü Kalitesi -->
@@ -2114,27 +2123,27 @@
                 </svg>
               </div>
               <div>
-                <div class="mc-title">Görüntü Kalitesi</div>
-                <div class="mc-sub">Dönüştürülmüş görüntü ne kadar net ve kaliteli?</div>
+                <div class="mc-title">Signal Quality (PSNR)</div>
+                <div class="mc-sub">Measures clarity and signal-to-noise ratio.</div>
               </div>
             </div>
             <div class="mc-bars">
               <div class="mc-bar-row">
-                <span class="mc-lbl">Önce</span>
+                <span class="mc-lbl">BEFORE</span>
                 <div class="mc-track">
                   <div class="mc-fill" style="width:100%;background:var(--emerald)"></div>
                 </div>
-                <span class="mc-num">Orijinal</span>
+                <span class="mc-num">Original</span>
               </div>
               <div class="mc-bar-row">
-                <span class="mc-lbl">Sonra</span>
+                <span class="mc-lbl">AFTER</span>
                 <div class="mc-track">
                   <div class="mc-fill" style="width:68%;background:var(--cyan)"></div>
                 </div>
                 <span class="mc-num">27.19 dB</span>
               </div>
             </div>
-            <div class="mc-verdict mc-v-ok">Kabul edilebilir kalite</div>
+            <div class="mc-verdict mc-v-ok">Acceptable signal quality</div>
           </div>
 
           <!-- Yüz Yapısı -->
@@ -2148,27 +2157,27 @@
                 </svg>
               </div>
               <div>
-                <div class="mc-title">Yüz Yapısı</div>
-                <div class="mc-sub">Yüzün genel formu ne kadar korundu?</div>
+                <div class="mc-title">Structural Similarity (SSIM)</div>
+                <div class="mc-sub">Measures preservation of overall facial structure.</div>
               </div>
             </div>
             <div class="mc-bars">
               <div class="mc-bar-row">
-                <span class="mc-lbl">Önce</span>
+                <span class="mc-lbl">BEFORE</span>
                 <div class="mc-track">
                   <div class="mc-fill" style="width:100%;background:var(--emerald)"></div>
                 </div>
                 <span class="mc-num">%100</span>
               </div>
               <div class="mc-bar-row">
-                <span class="mc-lbl">Sonra</span>
+                <span class="mc-lbl">AFTER</span>
                 <div class="mc-track">
                   <div class="mc-fill" style="width:85%;background:var(--emerald)"></div>
                 </div>
                 <span class="mc-num">%85</span>
               </div>
             </div>
-            <div class="mc-verdict mc-v-ok">Yüz yapısı korundu</div>
+            <div class="mc-verdict mc-v-ok">Structure successfully preserved</div>
           </div>
 
           <!-- İnce Detaylar -->
@@ -2184,27 +2193,27 @@
                 </svg>
               </div>
               <div>
-                <div class="mc-title">İnce Detaylar</div>
-                <div class="mc-sub">Kırışık gibi küçük ayrıntılar ne kadar arttı?</div>
+                <div class="mc-title">High-Frequency Details</div>
+                <div class="mc-sub">Measures increase in fine details and textures.</div>
               </div>
             </div>
             <div class="mc-bars">
               <div class="mc-bar-row">
-                <span class="mc-lbl">Önce</span>
+                <span class="mc-lbl">BEFORE</span>
                 <div class="mc-track">
                   <div class="mc-fill" style="width:40%;background:var(--purple)"></div>
                 </div>
                 <span class="mc-num">3.2M</span>
               </div>
               <div class="mc-bar-row">
-                <span class="mc-lbl">Sonra</span>
+                <span class="mc-lbl">AFTER</span>
                 <div class="mc-track">
                   <div class="mc-fill" style="width:60%;background:var(--purple)"></div>
                 </div>
                 <span class="mc-num">4.8M</span>
               </div>
             </div>
-            <div class="mc-verdict mc-v-info">Beklenen artış (+50%)</div>
+            <div class="mc-verdict mc-v-info">Expected increase (+50%)</div>
           </div>
 
           <!-- Yüz Tonu -->
@@ -2225,27 +2234,27 @@
                 </svg>
               </div>
               <div>
-                <div class="mc-title">Yüz Tonu</div>
-                <div class="mc-sub">Genel parlaklık ve renk tonu değişti mi?</div>
+                <div class="mc-title">Luminance &amp; Tone</div>
+                <div class="mc-sub">Checks for shifts in overall brightness and color.</div>
               </div>
             </div>
             <div class="mc-bars">
               <div class="mc-bar-row">
-                <span class="mc-lbl">Önce</span>
+                <span class="mc-lbl">BEFORE</span>
                 <div class="mc-track">
                   <div class="mc-fill" style="width:100%;background:var(--amber)"></div>
                 </div>
                 <span class="mc-num">91M</span>
               </div>
               <div class="mc-bar-row">
-                <span class="mc-lbl">Sonra</span>
+                <span class="mc-lbl">AFTER</span>
                 <div class="mc-track">
                   <div class="mc-fill" style="width:98%;background:var(--amber)"></div>
                 </div>
                 <span class="mc-num">89M</span>
               </div>
             </div>
-            <div class="mc-verdict mc-v-ok">Ton neredeyse aynı kaldı (−2%)</div>
+            <div class="mc-verdict mc-v-ok">Tone remained consistent (~2%)</div>
           </div>
 
           <!-- Detay / Düzlük Dengesi -->
@@ -2266,27 +2275,27 @@
                 </svg>
               </div>
               <div>
-                <div class="mc-title">Detay / Düzlük Dengesi</div>
-                <div class="mc-sub">Yüz ne kadar "detaylı" bir hal aldı?</div>
+                <div class="mc-title">Spectral Balance (HF/LF)</div>
+                <div class="mc-sub">Ratio of high-frequency to low-frequency energy.</div>
               </div>
             </div>
             <div class="mc-bars">
               <div class="mc-bar-row">
-                <span class="mc-lbl">Önce</span>
+                <span class="mc-lbl">BEFORE</span>
                 <div class="mc-track">
                   <div class="mc-fill" style="width:35%;background:var(--indigo)"></div>
                 </div>
                 <span class="mc-num">0.035</span>
               </div>
               <div class="mc-bar-row">
-                <span class="mc-lbl">Sonra</span>
+                <span class="mc-lbl">AFTER</span>
                 <div class="mc-track">
                   <div class="mc-fill" style="width:54%;background:var(--indigo)"></div>
                 </div>
                 <span class="mc-num">0.054</span>
               </div>
             </div>
-            <div class="mc-verdict mc-v-info">Daha detaylı görünüm (+54%)</div>
+            <div class="mc-verdict mc-v-info">Enhanced detail representation (+54%)</div>
           </div>
 
         </div><!-- /mc-grid -->
