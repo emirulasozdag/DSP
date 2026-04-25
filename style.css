@@ -3596,6 +3596,7 @@ textarea {
 .mesh-sw input:checked+.sw-track::after {
   transform: translateX(13px) !important;
 }
+
 /* ════════════════════════════════════════════════════════════════
    AGING WORKSPACE — Color Harmonisation (Deep Blue + Cyan/Teal)
    Scoped overrides: DO NOT affect other modules
@@ -3608,11 +3609,13 @@ textarea {
   font-weight: 700;
   color: #fff !important;
 }
+
 .aging-apply-btn:hover {
   transform: translateY(-2px);
   box-shadow: 0 12px 32px rgba(37, 99, 235, 0.50) !important;
   background: linear-gradient(135deg, #1e40af 0%, #1d4ed8 55%, #2563EB 100%) !important;
 }
+
 .aging-apply-btn:active {
   transform: translateY(0);
   box-shadow: 0 4px 14px rgba(37, 99, 235, 0.35) !important;
@@ -3624,15 +3627,18 @@ textarea {
   border-color: var(--bg) !important;
   box-shadow: 0 0 12px rgba(6, 182, 212, 0.65) !important;
 }
+
 #page-aging .slider::-moz-range-thumb {
   background: #06B6D4 !important;
   box-shadow: 0 0 12px rgba(6, 182, 212, 0.65) !important;
 }
+
 /* Bipolar (Years to Simulate) thumb already uses --cyan; boost its glow */
 #page-aging .slider-bipolar::-webkit-slider-thumb {
   background: #06B6D4 !important;
   box-shadow: 0 0 14px rgba(6, 182, 212, 0.75) !important;
 }
+
 #page-aging .slider-bipolar::-moz-range-thumb {
   background: #06B6D4 !important;
 }
@@ -3687,6 +3693,7 @@ textarea {
   background: #06B6D4;
   box-shadow: 0 0 8px rgba(6, 182, 212, 0.8);
 }
+
 .aging-badge-dot {
   background: #06B6D4;
   box-shadow: 0 0 7px rgba(6, 182, 212, 0.8);
@@ -3741,18 +3748,67 @@ textarea {
     0 0 0 1px rgba(6, 182, 212, 0.05) inset !important;
 }
 
-/* ═══ PREPROCESSING: hero title accent → cyan [palette standardization] */
+/* ═══ PREPROCESSING: hero title accent — matches Upload 'Warp' gradient */
 #page-preprocess .hero-grad {
-  background: #06B6D4 !important;
+  background: linear-gradient(135deg, var(--indigo), var(--cyan)) !important;
   -webkit-background-clip: text !important;
   -webkit-text-fill-color: transparent !important;
   background-clip: text !important;
 }
 
-/* ═══ ANALYSIS: hero title accent → cyan [palette standardization] */
+/* ═══ ANALYSIS: hero title accent — matches Upload 'Warp' gradient */
 #page-analysis .an-hero-grad {
-  background: #06B6D4;
+  background: linear-gradient(135deg, var(--indigo), var(--cyan));
   -webkit-background-clip: text;
   -webkit-text-fill-color: transparent;
   background-clip: text;
+}
+/* ═══ AGING wireframes: color-coded anatomy (matches Expression workspace) ══ */
+
+/* ── BEFORE frame ──────────────────────────────────────────────────────────── */
+/* Face oval — subtle slate */
+#page-aging .aging-face-wrap:not(.aging-face-wrap-active) .face-svg ellipse:nth-child(1) {
+  stroke: rgba(51, 65, 85, 0.55) !important;
+  fill:   rgba(51, 65, 85, 0.04) !important;
+}
+/* Left + right eye — cyan */
+#page-aging .aging-face-wrap:not(.aging-face-wrap-active) .face-svg ellipse:nth-child(2),
+#page-aging .aging-face-wrap:not(.aging-face-wrap-active) .face-svg ellipse:nth-child(3) {
+  stroke: #06B6D4 !important;
+}
+/* Nose — amber */
+#page-aging .aging-face-wrap:not(.aging-face-wrap-active) .face-svg path:nth-child(4) {
+  stroke: rgba(245, 158, 11, 0.70) !important;
+}
+/* Lips / mouth — pink */
+#page-aging .aging-face-wrap:not(.aging-face-wrap-active) .face-svg path:nth-child(5) {
+  stroke: #EC4899 !important;
+}
+
+/* ── AFTER frame ───────────────────────────────────────────────────────────── */
+/* Face oval — subtle slate */
+#page-aging .aging-face-wrap-active .face-svg ellipse:nth-child(1) {
+  stroke: rgba(51, 65, 85, 0.55) !important;
+  fill:   rgba(51, 65, 85, 0.04) !important;
+}
+/* Brow + wrinkle age-lines (children 2-6) — dim amber to read as age texture */
+#page-aging .aging-face-wrap-active .face-svg path:nth-child(2),
+#page-aging .aging-face-wrap-active .face-svg path:nth-child(3),
+#page-aging .aging-face-wrap-active .face-svg path:nth-child(4),
+#page-aging .aging-face-wrap-active .face-svg path:nth-child(5),
+#page-aging .aging-face-wrap-active .face-svg path:nth-child(6) {
+  stroke: rgba(245, 158, 11, 0.38) !important;
+}
+/* Left + right eye — cyan */
+#page-aging .aging-face-wrap-active .face-svg ellipse:nth-child(7),
+#page-aging .aging-face-wrap-active .face-svg ellipse:nth-child(8) {
+  stroke: #06B6D4 !important;
+}
+/* Nose — amber */
+#page-aging .aging-face-wrap-active .face-svg path:nth-child(9) {
+  stroke: rgba(245, 158, 11, 0.70) !important;
+}
+/* Lips / mouth — pink */
+#page-aging .aging-face-wrap-active .face-svg path:nth-child(10) {
+  stroke: #EC4899 !important;
 }
