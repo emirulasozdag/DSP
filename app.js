@@ -68,8 +68,327 @@ const appState = {
   dimensions: '1024 × 1024',
 };
 
+const backendState = {
+  landmarksLoaded: false,
+  analysisLoaded: false,
+  landmarks: [],
+  lastLmData: null,   // cached last successful detection response
+  lastExprDataUrl: '',
+  lastAgingDataUrl: '',
+  analysisSpectra: null,
+  spectrumMode: 'mag',
+};
+
+function mapLandmarkMethodLabel(method, conf) {
+  const m = String(method || '').toLowerCase();
+  if (m === 'mediapipe') return 'MediaPipe';
+  if (m === 'fallback-haar') return 'Haar CV';
+  if (m === 'fallback-skin') return 'Skin Fallback';
+  if (m === 'fallback-geo') return 'Geometric Fallback';
+  const c = Number(conf || 0);
+  return c >= 99 ? 'MediaPipe' : c >= 80 ? 'Haar CV' : 'Fallback';
+}
+
+function dataUrlToBlob(dataUrl) {
+  const parts = String(dataUrl || '').split(',');
+  if (parts.length < 2) return null;
+  const mimeMatch = parts[0].match(/data:(.*?);base64/);
+  const mime = mimeMatch ? mimeMatch[1] : 'image/jpeg';
+  const binary = atob(parts[1]);
+  const len = binary.length;
+  const bytes = new Uint8Array(len);
+  for (let i = 0; i < len; i += 1) bytes[i] = binary.charCodeAt(i);
+  return new Blob([bytes], { type: mime });
+}
+
+function loadImageFromDataUrl(dataUrl) {
+  return new Promise((resolve, reject) => {
+    const img = new Image();
+    img.onload = () => resolve(img);
+    img.onerror = () => reject(new Error('Could not load image for transformation.'));
+    img.src = dataUrl;
+  });
+}
+
+async function getCurrentImageBlob() {
+  const directFile = fileInput?.files?.[0];
+  if (directFile) return directFile;
+  if (!appState.imageDataUrl) return null;
+  return dataUrlToBlob(appState.imageDataUrl);
+}
+
+function sampleLandmarks(points, targetCount = 68) {
+  if (!Array.isArray(points) || points.length === 0) return [];
+  if (points.length === targetCount) return points;
+  const sampled = [];
+  for (let i = 0; i < targetCount; i += 1) {
+    const idx = Math.round((i * (points.length - 1)) / (targetCount - 1));
+    sampled.push(points[idx]);
+  }
+  return sampled;
+}
+
+function applyLandmarksToSvg(points) {
+  const svg = $('#lmSvg');
+  const circles = Array.from($$('#ptsG circle'));
+  if (!svg || circles.length === 0) return;
+
+  const lmCanvas = document.querySelector('.lm-canvas');
+  const bgImg = document.querySelector('#lmBgImg');
+  const refEl = (bgImg && bgImg.style.display !== 'none') ? bgImg : lmCanvas;
+  const refRect = refEl?.getBoundingClientRect();
+  const displayedImageWidth = Math.max(1, Math.round(refRect?.width || svg.clientWidth || 300));
+  const displayedImageHeight = Math.max(1, Math.round(refRect?.height || svg.clientHeight || 290));
+
+  // Keep SVG overlay pixel-space aligned with the displayed image layer.
+  svg.setAttribute('width', String(displayedImageWidth));
+  svg.setAttribute('height', String(displayedImageHeight));
+  svg.setAttribute('viewBox', `0 0 ${displayedImageWidth} ${displayedImageHeight}`);
+
+  const sampled = sampleLandmarks(points, circles.length);
+  backendState.landmarks = sampled;
+
+  // Compute screen-space mapped coordinates from image-space landmarks.
+  const mx = [], my = [];
+  sampled.forEach((p, i) => {
+    const c = circles[i];
+    if (!c) return;
+    const ix = Number(p.x);
+    const iy = Number(p.y);
+
+    const imageWidth = Number(p.imageWidth || displayedImageWidth);
+    const imageHeight = Number(p.imageHeight || displayedImageHeight);
+    mx[i] = Number.isFinite(ix) ? (ix / imageWidth) * displayedImageWidth : Number(c.getAttribute('cx'));
+    my[i] = Number.isFinite(iy) ? (iy / imageHeight) * displayedImageHeight : Number(c.getAttribute('cy'));
+
+    c.setAttribute('cx', mx[i].toFixed(2));
+    c.setAttribute('cy', my[i].toFixed(2));
+  });
+
+  // Helper: build SVG point-list string from landmark indices
+  const pt  = i => (mx[i] !== undefined) ? `${mx[i].toFixed(1)},${my[i].toFixed(1)}` : null;
+  const pts = (...idx) => idx.map(pt).filter(Boolean).join(' ');
+
+  // ── Rebuild connection paths ──────────────────────────────────
+  // Jaw 0–16
+  const jaw = $$('#connG [data-region="jaw"]')[0];
+  if (jaw) jaw.setAttribute('points', pts(...Array.from({ length: 17 }, (_, i) => i)));
+
+  // Brows: left 17–21, right 22–26
+  const browEls = $$('#connG [data-region="brow"]');
+  if (browEls[0]) browEls[0].setAttribute('points', pts(17, 18, 19, 20, 21));
+  if (browEls[1]) browEls[1].setAttribute('points', pts(22, 23, 24, 25, 26));
+
+  // Eyes: left 36–41, right 42–47
+  const eyeEls = $$('#connG [data-region="eyes"]');
+  if (eyeEls[0]) eyeEls[0].setAttribute('points', pts(36, 37, 38, 39, 40, 41));
+  if (eyeEls[1]) eyeEls[1].setAttribute('points', pts(42, 43, 44, 45, 46, 47));
+
+  // Nose: bridge polyline 27–30, bottom polyline 31–35, 2 lateral lines
+  const noseEls   = Array.from($$('#connG [data-region="nose"]'));
+  const nosePoly  = noseEls.filter(el => el.tagName.toLowerCase() !== 'line');
+  const noseLines = noseEls.filter(el => el.tagName.toLowerCase() === 'line');
+  if (nosePoly[0]) nosePoly[0].setAttribute('points', pts(27, 28, 29, 30));
+  if (nosePoly[1]) nosePoly[1].setAttribute('points', pts(31, 32, 33, 34, 35));
+  if (noseLines[0] && mx[31] !== undefined && mx[30] !== undefined) {
+    noseLines[0].setAttribute('x1', mx[31].toFixed(1)); noseLines[0].setAttribute('y1', my[31].toFixed(1));
+    noseLines[0].setAttribute('x2', mx[30].toFixed(1)); noseLines[0].setAttribute('y2', my[30].toFixed(1));
+  }
+  if (noseLines[1] && mx[35] !== undefined && mx[30] !== undefined) {
+    noseLines[1].setAttribute('x1', mx[35].toFixed(1)); noseLines[1].setAttribute('y1', my[35].toFixed(1));
+    noseLines[1].setAttribute('x2', mx[30].toFixed(1)); noseLines[1].setAttribute('y2', my[30].toFixed(1));
+  }
+
+  // Mouth: outer 48–59, inner 60–67
+  const mouthEls = $$('#connG [data-region="mouth"]');
+  if (mouthEls[0]) mouthEls[0].setAttribute('points', pts(48, 49, 50, 51, 52, 53, 54, 55, 56, 57, 58, 59));
+  if (mouthEls[1]) mouthEls[1].setAttribute('points', pts(60, 61, 62, 63, 64, 65, 66, 67));
+}
+
+function applyLandmarkStatsUI(data) {
+  const n    = data.pointCount;
+  const conf = Number(data.confidence || 85);
+  const ms   = Math.round(data.durationMs);
+  const backendLabel = mapLandmarkMethodLabel(data.method, conf);
+
+  if ($('#lmPtsCount'))    $('#lmPtsCount').textContent    = n;
+  if ($('#lmLatencyVal'))  $('#lmLatencyVal').textContent  = ms + 'ms';
+  if ($('#lmConfText'))    $('#lmConfText').textContent    = conf.toFixed(1);
+  if ($('#lmConfBadge'))   $('#lmConfBadge').textContent   = conf.toFixed(1) + '%';
+  if ($('#lmStatPts'))     $('#lmStatPts').textContent     = n;
+  if ($('#lmStatConf'))    $('#lmStatConf').textContent    = conf.toFixed(1) + '%';
+  if ($('#lmStatBackend')) $('#lmStatBackend').textContent = backendLabel;
+  if ($('#lmStatusText'))  $('#lmStatusText').textContent  = `Detection complete · ${n}/${n} pts`;
+
+  const circ    = 251.3;
+  const fillLen = ((circ * conf) / 100).toFixed(1);
+  if ($('#lmAccRing')) $('#lmAccRing').setAttribute('stroke-dasharray', `${fillLen} ${circ}`);
+}
+
+async function fetchLandmarksFromBackend(force = false) {
+  if (!appState.imageDataUrl) { toast('Upload an image first.', 'warning'); return; }
+
+  // Already loaded — just re-paint the stats without hitting the network
+  if (backendState.landmarksLoaded && !force) {
+    if (backendState.lastLmData) applyLandmarkStatsUI(backendState.lastLmData);
+    return;
+  }
+
+  // Show "detecting…" state
+  if ($('#lmStatusText')) $('#lmStatusText').textContent = 'Detecting…';
+  if ($('#btnRunLM')) { $('#btnRunLM').disabled = true; $('#btnRunLM').textContent = '⧗ Detecting…'; }
+
+  try {
+    const blob = await getCurrentImageBlob();
+    if (!blob) return;
+    const fd = new FormData();
+    fd.append('image', blob, appState.fileName || 'input.jpg');
+    const res = await fetch('/api/landmarks', { method: 'POST', body: fd });
+    const data = await res.json();
+    if (!res.ok || !data.ok) throw new Error(data.error || 'Landmark detection failed.');
+
+    const points = (data.landmarks || []).map(p => ({
+      x: p.x,
+      y: p.y,
+      imageWidth: data.width,
+      imageHeight: data.height,
+    }));
+    applyLandmarksToSvg(points);
+    backendState.landmarksLoaded = true;
+    backendState.lastLmData = data;  // cache for re-entry
+
+    applyLandmarkStatsUI(data);
+
+    const conf = Number(data.confidence || 85);
+    const ms   = Math.round(data.durationMs);
+    const backendLabel = mapLandmarkMethodLabel(data.method, conf);
+    toast(`Landmarks: ${data.pointCount} pts · ${conf}% conf · ${ms} ms (${backendLabel})`, 'success');
+  } catch (err) {
+    if ($('#lmStatusText')) $('#lmStatusText').textContent = 'Detection failed.';
+    toast(`Backend landmarks error: ${err.message}`, 'warning');
+  } finally {
+    if ($('#btnRunLM')) {
+      $('#btnRunLM').disabled = false;
+      $('#btnRunLM').innerHTML = '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg> Detect Landmarks';
+    }
+  }
+}
+
+async function buildTransformedBlobForAnalysis() {
+  const sourceDataUrl = backendState.lastAgingDataUrl || backendState.lastExprDataUrl;
+  if (!sourceDataUrl) return null;
+  return dataUrlToBlob(sourceDataUrl);
+}
+
+function renderSpectrumImages(mode = backendState.spectrumMode || 'mag') {
+  const spectra = backendState.analysisSpectra;
+  if (!spectra || !spectra.original || !spectra.transformed) return;
+
+  backendState.spectrumMode = mode;
+  const key = mode === 'phase' ? 'phase' : 'magnitude';
+  const boxes = Array.from(document.querySelectorAll('#page-analysis .spec-grid .spec-box'));
+  if (boxes.length < 2) return;
+
+  const applyToBox = (box, b64Data) => {
+    if (!box || !b64Data) return;
+    const oldSvg = box.querySelector('svg');
+    if (oldSvg) oldSvg.style.display = 'none';
+
+    let img = box.querySelector('img.spec-img-render');
+    if (!img) {
+      img = document.createElement('img');
+      img.className = 'spec-img-render';
+      img.alt = 'Spectrum image';
+      img.style.cssText = 'width:100%;height:170px;object-fit:cover;border-radius:6px;border:1px solid rgba(255,255,255,.06);display:block';
+      box.appendChild(img);
+    }
+    img.src = `data:image/jpeg;base64,${b64Data}`;
+  };
+
+  applyToBox(boxes[0], spectra.original[key]);
+  applyToBox(boxes[1], spectra.transformed[key]);
+}
+
+function applyAnalysisFromBackend(data) {
+  const mse = Number(data.mse || 0);
+  const psnr = Number(data.psnr || 0);
+  const ssim = Number(data.ssim || 0);
+  const energy = data.energy || {};
+
+  if (data.spectrum && data.spectrum.original && data.spectrum.transformed) {
+    backendState.analysisSpectra = data.spectrum;
+    renderSpectrumImages(backendState.spectrumMode || 'mag');
+  }
+
+  if ($('#qmMseVal')) $('#qmMseVal').textContent = mse.toFixed(2);
+  if ($('#qmPsnrVal')) $('#qmPsnrVal').textContent = `${psnr.toFixed(2)} dB`;
+  if ($('#qmSsimVal')) $('#qmSsimVal').textContent = ssim.toFixed(3);
+  if ($('#anTblMse')) $('#anTblMse').textContent = mse.toFixed(4);
+  if ($('#anTblPsnr')) $('#anTblPsnr').textContent = psnr.toFixed(4);
+  if ($('#anTblSsim')) $('#anTblSsim').textContent = ssim.toFixed(4);
+  if ($('#anTblMse')) $('#anTblMse').textContent = mse.toFixed(4);
+  if ($('#anTblPsnr')) $('#anTblPsnr').textContent = psnr.toFixed(4);
+  if ($('#anTblSsim')) $('#anTblSsim').textContent = ssim.toFixed(4);
+
+  const msePct = clamp((mse / 220) * 100, 5, 98);
+  const psnrPct = clamp((psnr / 40) * 100, 5, 98);
+  const ssimPct = clamp(ssim * 100, 5, 98);
+  if ($('#qmMsePct')) $('#qmMsePct').textContent = `${Math.round(msePct)}%`;
+  if ($('#qmPsnrPct')) $('#qmPsnrPct').textContent = `${Math.round(psnrPct)}%`;
+  if ($('#qmSsimPct')) $('#qmSsimPct').textContent = `${Math.round(ssimPct)}%`;
+
+  if ($('#enTotal')) $('#enTotal').innerHTML = `${((energy.total || 0) / 1e7).toFixed(2)} <small>×10⁷</small>`;
+  if ($('#enHF')) $('#enHF').innerHTML = `${((energy.high || 0) / 1e6).toFixed(1)} <small>×10⁶</small>`;
+  if ($('#enLF')) $('#enLF').innerHTML = `${((energy.low || 0) / 1e7).toFixed(1)} <small>×10⁷</small>`;
+  if ($('#enRatio')) $('#enRatio').textContent = Number(energy.hfLfRatio || 0).toFixed(3);
+  if ($('#anTblHfLf')) $('#anTblHfLf').textContent = Number(energy.hfLfRatio || 0).toFixed(6);
+  if ($('#anTblHf')) $('#anTblHf').textContent = Number(energy.high || 0).toFixed(2);
+  if ($('#anTblLf')) $('#anTblLf').textContent = Number(energy.low || 0).toFixed(2);
+
+  if ($('#enFillTotal')) $('#enFillTotal').style.width = `${clamp(((energy.total || 0) / 1e8) * 100, 20, 100)}%`;
+  if ($('#enFillHF')) $('#enFillHF').style.width = `${clamp(((energy.high || 0) / 1e7) * 100, 10, 100)}%`;
+  if ($('#enFillLF')) $('#enFillLF').style.width = `${clamp(((energy.low || 0) / 1e8) * 100, 20, 100)}%`;
+  if ($('#enFillRatio')) $('#enFillRatio').style.width = `${clamp((Number(energy.hfLfRatio || 0) / 0.2) * 100, 5, 100)}%`;
+
+  setRingProgress($('#qmMseRing'), msePct);
+  setRingProgress($('#qmPsnrRing'), psnrPct);
+  setRingProgress($('#qmSsimRing'), ssimPct);
+}
+
+async function fetchAnalysisFromBackend(force = false) {
+  if (!appState.imageDataUrl) return;
+  if (backendState.analysisLoaded && !force) return;
+  try {
+    if (!backendState.lastExprDataUrl && !backendState.lastAgingDataUrl) {
+      if (force) toast('Run Expression Warp or Aging first, then open Analysis.', 'info');
+      return;
+    }
+    const originalBlob = await getCurrentImageBlob();
+    const transformedBlob = await buildTransformedBlobForAnalysis();
+    if (!originalBlob || !transformedBlob) {
+      if (force) toast('Could not prepare transformed image for analysis.', 'warning');
+      return;
+    }
+
+    const fd = new FormData();
+    fd.append('original', originalBlob, appState.fileName || 'original.jpg');
+    fd.append('transformed', transformedBlob, 'transformed.jpg');
+
+    const res = await fetch('/api/analysis', { method: 'POST', body: fd });
+    const data = await res.json();
+    if (!res.ok || !data.ok) throw new Error(data.error || 'Analysis failed.');
+
+    applyAnalysisFromBackend(data);
+    backendState.analysisLoaded = true;
+    toast(`Backend analysis updated (${data.durationMs} ms).`, 'success');
+  } catch (err) {
+    toast(`Backend analysis error: ${err.message}`, 'warning');
+  }
+}
+
 function setPipelineImage(dataUrl, meta = {}) {
-  appState.imageDataUrl = dataUrl || appState.imageDataUrl;
+  // Fix: '' || old would keep old URL when removing. Use typeof check so empty string clears correctly.
+  appState.imageDataUrl = typeof dataUrl === 'string' ? dataUrl : appState.imageDataUrl;
   appState.fileName = meta.fileName || appState.fileName;
   appState.format = meta.format || appState.format;
   appState.sizeText = meta.sizeText || appState.sizeText;
@@ -102,6 +421,177 @@ function setPipelineImage(dataUrl, meta = {}) {
   assignText('#ppFFormat', appState.format);
   assignText('#lmFileName', appState.fileName);
   assignText('#exprFileName', appState.fileName);
+
+  syncExpressionPhotoPanels();
+  syncAgingPhotoPanels();
+  syncLandmarkPhotoBg();
+}
+
+/* ── Aging page: inject photo into Before/After panels ── */
+function syncAgingPhotoPanels() {
+  const beforeWrap = document.querySelector('#page-aging .aging-side-card:not(.aging-side-card-active) .aging-face-wrap');
+  const afterWrap  = document.querySelector('#page-aging .aging-side-card.aging-side-card-active .aging-face-wrap');
+  if (!beforeWrap || !afterWrap) return;
+
+  const setup = (wrap, id) => {
+    wrap.style.position = 'relative';
+    let img = wrap.querySelector(`#${id}`);
+    if (!img) {
+      img = document.createElement('img');
+      img.id = id; img.alt = '';
+      img.style.cssText = 'position:absolute;inset:0;width:100%;height:100%;object-fit:cover;border-radius:inherit;display:none;z-index:1;';
+      wrap.prepend(img);
+    }
+    return img;
+  };
+
+  const beforeImg = setup(beforeWrap, 'agingBeforeImg');
+  const afterImg  = setup(afterWrap,  'agingAfterImg');
+  const beforeUrl = backendState.lastExprDataUrl || appState.imageDataUrl;
+  const afterUrl = backendState.lastAgingDataUrl;
+
+  if (beforeUrl) {
+    beforeImg.src = beforeUrl;
+    beforeImg.style.display = 'block';
+    if (afterUrl) {
+      afterImg.src = afterUrl;
+      afterImg.style.display = 'block';
+    } else {
+      afterImg.src = '';
+      afterImg.style.display = 'none';
+    }
+    // Keep SVGs as subtle wireframe overlays
+    $$('#page-aging .aging-face-wrap .face-svg').forEach(s => {
+      s.style.position = 'relative'; s.style.zIndex = '2'; s.style.opacity = '0.25';
+    });
+  } else {
+    beforeImg.style.display = 'none';
+    afterImg.style.display  = 'none';
+    $$('#page-aging .aging-face-wrap .face-svg').forEach(s => { s.style.opacity = ''; s.style.zIndex = ''; });
+  }
+}
+
+/* ── Landmark page: show uploaded photo as semi-transparent canvas background ── */
+function syncLandmarkPhotoBg() {
+  const lmCanvas = document.querySelector('.lm-canvas');
+  if (!lmCanvas) return;
+  lmCanvas.style.position = 'relative';
+  let img = lmCanvas.querySelector('#lmBgImg');
+  if (!img) {
+    img = document.createElement('img');
+    img.id = 'lmBgImg'; img.alt = '';
+    img.style.cssText = 'position:absolute;inset:0;width:100%;height:100%;object-fit:fill;border-radius:inherit;display:none;opacity:0.40;z-index:0;';
+    lmCanvas.prepend(img);
+    // Keep scan line + SVG above the photo in the same coordinate space.
+    const scan = lmCanvas.querySelector('.lm-scan');
+    const svg = lmCanvas.querySelector('.lm-svg');
+    if (scan) {
+      scan.style.position = 'absolute';
+      scan.style.inset = '0';
+      scan.style.zIndex = '1';
+      scan.style.pointerEvents = 'none';
+    }
+    if (svg) {
+      svg.style.position = 'absolute';
+      svg.style.inset = '0';
+      svg.style.width = '100%';
+      svg.style.height = '100%';
+      svg.style.zIndex = '2';
+      svg.style.pointerEvents = 'none';
+    }
+  }
+  const has = Boolean(appState.imageDataUrl);
+  img.src = has ? appState.imageDataUrl : '';
+  img.style.display = has ? 'block' : 'none';
+}
+
+function ensureExpressionPhotoElements() {
+  const bodies = $$('#page-expression .comp-card .comp-body');
+  if (!bodies || bodies.length < 2) return;
+
+  // Original panel — plain <img>
+  const setupImg = (body, id) => {
+    if (!body) return null;
+    body.style.position = 'relative';
+    let img = body.querySelector(`#${id}`);
+    if (!img) {
+      img = document.createElement('img');
+      img.id = id;
+      img.alt = 'Expression preview';
+      img.style.cssText = [
+        'position:absolute', 'inset:0', 'width:100%', 'height:100%',
+        'object-fit:cover', 'border-radius:12px', 'display:none',
+      ].join(';');
+      body.prepend(img);
+    }
+    return img;
+  };
+
+  // Transformed panel — <canvas> so we can do real pixel-level warp
+  const setupCanvas = (body, id) => {
+    if (!body) return null;
+    body.style.position = 'relative';
+    let c = body.querySelector(`#${id}`);
+    if (!c) {
+      c = document.createElement('canvas');
+      c.id = id;
+      c.style.cssText = [
+        'position:absolute', 'inset:0', 'width:100%', 'height:100%',
+        'border-radius:12px', 'display:none',
+      ].join(';');
+      body.prepend(c);
+    }
+    return c;
+  };
+
+  setupImg(bodies[0], 'exprOriginalImg');
+  setupCanvas(bodies[1], 'exprTransformedCanvas');
+}
+
+function renderExpressionCanvasFromDataUrl(dataUrl) {
+  const canvas = document.getElementById('exprTransformedCanvas');
+  if (!canvas || canvas.style.display === 'none' || !dataUrl) return;
+
+  const tmpImg = new Image();
+  tmpImg.onload = () => {
+    const rect = canvas.getBoundingClientRect();
+    const W = Math.round(rect.width)  || 300;
+    const H = Math.round(rect.height) || 300;
+    if (canvas.width !== W)  canvas.width  = W;
+    if (canvas.height !== H) canvas.height = H;
+
+    const ctx = canvas.getContext('2d');
+    ctx.clearRect(0, 0, W, H);
+    ctx.drawImage(tmpImg, 0, 0, W, H);
+  };
+  tmpImg.src = dataUrl;
+}
+
+function syncExpressionPhotoPanels() {
+  ensureExpressionPhotoElements();
+
+  const originalImg    = $('#exprOriginalImg');
+  const transformedCvs = $('#exprTransformedCanvas');
+  const hasImage = Boolean(appState.imageDataUrl);
+  const originalSvg    = $('#page-expression .comp-card .face-svg');
+  const transformedSvg = $('#exprSvg');
+
+  if (!originalImg || !transformedCvs) return;
+
+  if (hasImage) {
+    originalImg.src = appState.imageDataUrl;
+    originalImg.style.display = 'block';
+    transformedCvs.style.display = 'block';
+    if (originalSvg)    originalSvg.style.display    = 'none';
+    if (transformedSvg) transformedSvg.style.display = 'none';
+    renderExpressionCanvasFromDataUrl(backendState.lastExprDataUrl || appState.imageDataUrl);
+    return;
+  }
+
+  originalImg.style.display    = 'none';
+  transformedCvs.style.display = 'none';
+  if (originalSvg)    originalSvg.style.display    = 'block';
+  if (transformedSvg) transformedSvg.style.display = 'block';
 }
 
 if (browseBtn) browseBtn.addEventListener('click', e => { e.stopPropagation(); fileInput.click(); });
@@ -135,6 +625,11 @@ function handleFile(file) {
         sizeText: (file.size / (1024 * 1024)).toFixed(2) + ' MB',
         dimensions: img.width + ' × ' + img.height,
       });
+      backendState.landmarksLoaded = false;
+      backendState.analysisLoaded = false;
+      backendState.lastExprDataUrl = '';
+      backendState.lastAgingDataUrl = '';
+      backendState.analysisSpectra = null;
       uploadCard.style.display = 'none';
       previewCard.style.display = 'block';
       toast('Image loaded — ready to process!', 'success');
@@ -149,6 +644,13 @@ if ($('#btnRemove')) $('#btnRemove').addEventListener('click', () => {
   previewCard.style.display = 'none';
   fileInput.value = '';
   appState.imageDataUrl = '';
+  backendState.landmarksLoaded = false;
+  backendState.analysisLoaded = false;
+  backendState.lastExprDataUrl = '';
+  backendState.lastAgingDataUrl = '';
+  backendState.analysisSpectra = null;
+  backendState.landmarks = [];
+  backendState.lastLmData = null;
   setPipelineImage('', {
     fileName: 'portrait_01.jpg',
     format: 'JPEG',
@@ -163,6 +665,73 @@ const tgPoints = $('#tgPoints'), tgMesh = $('#tgMesh'), tgLabels = $('#tgLabels'
 if (tgPoints) tgPoints.addEventListener('change', () => { $('#ptsG').style.opacity = tgPoints.checked ? 1 : 0; });
 if (tgMesh) tgMesh.addEventListener('change', () => { $('#meshG').style.opacity = tgMesh.checked ? 1 : 0; });
 if (tgLabels) tgLabels.addEventListener('change', () => { $('#labelsG').style.opacity = tgLabels.checked ? 1 : 0; });
+
+/* Region filter: All / Jaw / Brow / Eyes / Nose / Mouth */
+const segRegion = $('#segRegion');
+if (segRegion) {
+  segRegion.querySelectorAll('.seg-btn').forEach(btn => {
+    btn.addEventListener('click', () => {
+      segRegion.querySelectorAll('.seg-btn').forEach(b => b.classList.remove('active'));
+      btn.classList.add('active');
+      const val = btn.dataset.val;
+      $$('#ptsG circle').forEach(c => {
+        const idx = Number(c.getAttribute('data-idx'));
+        const show = val === 'all'
+          || (val === 'jaw'   && idx <= 16)
+          || (val === 'brow'  && idx >= 17 && idx <= 26)
+          || (val === 'nose'  && idx >= 27 && idx <= 35)
+          || (val === 'eyes'  && idx >= 36 && idx <= 47)
+          || (val === 'mouth' && idx >= 48);
+        c.style.display = show ? '' : 'none';
+      });
+      $$('#connG [data-region]').forEach(el => {
+        el.style.display = (val === 'all' || el.dataset.region === val) ? '' : 'none';
+      });
+      const meshG = $('#meshG');
+      if (meshG) meshG.style.display = val === 'all' ? '' : 'none';
+    });
+  });
+}
+
+/* Re-detect button */
+if ($('#btnRunLM')) {
+  $('#btnRunLM').addEventListener('click', () => {
+    backendState.landmarksLoaded = false;
+    fetchLandmarksFromBackend(true);
+  });
+}
+
+/* Model / schema toggles (visual-only — backend always uses best available) */
+['#segModel', '#segSchema'].forEach(sel => {
+  const grp = $(sel);
+  if (!grp) return;
+  grp.querySelectorAll('.seg-btn').forEach(btn => {
+    btn.addEventListener('click', () => {
+      grp.querySelectorAll('.seg-btn').forEach(b => b.classList.remove('active'));
+      btn.classList.add('active');
+    });
+  });
+});
+
+/* Live coordinate display on hover */
+const lmCanvasEl = document.querySelector('.lm-canvas');
+if (lmCanvasEl) {
+  lmCanvasEl.addEventListener('mousemove', e => {
+    const rect = lmCanvasEl.getBoundingClientRect();
+    const svg  = $('#lmSvg');
+    const vb   = svg?.viewBox?.baseVal;
+    const vbW  = vb?.width  || 300;
+    const vbH  = vb?.height || 290;
+    const rx = ((e.clientX - rect.left)  / rect.width)  * vbW;
+    const ry = ((e.clientY - rect.top)   / rect.height) * vbH;
+    const coord = $('#lmCoordDisplay');
+    if (coord) coord.textContent = `x: ${rx.toFixed(0)}   y: ${ry.toFixed(0)}`;
+  });
+  lmCanvasEl.addEventListener('mouseleave', () => {
+    const coord = $('#lmCoordDisplay');
+    if (coord) coord.innerHTML = 'x: \u2014 &nbsp; y: \u2014';
+  });
+}
 
 /* ═══════════════════ EXPRESSION SLIDERS ═══════════════════ */
 const sliders = [
@@ -216,6 +785,7 @@ function updateExprSvg() {
       `<span>Slim: ${Math.round(slim * 100)}%</span>`;
   }
 
+  backendState.analysisLoaded = false;
   updateAnalysisMetrics();
 }
 
@@ -342,6 +912,11 @@ if ($('#btnCapture')) $('#btnCapture').addEventListener('click', () => {
   });
   uploadCard.style.display = 'none';
   previewCard.style.display = 'block';
+  backendState.landmarksLoaded = false;
+  backendState.analysisLoaded = false;
+  backendState.lastExprDataUrl = '';
+  backendState.lastAgingDataUrl = '';
+  backendState.analysisSpectra = null;
   toast('Webcam frame captured!', 'success');
 });
 
@@ -386,25 +961,106 @@ const radioRGB = $('#radioRGB'), radioGray = $('#radioGray');
 
 /* ═══════════════════ EXPORT CSV (landmarks demo) ═══════════════════ */
 if ($('#btnExportCSV')) $('#btnExportCSV').addEventListener('click', () => {
-  const pts = Array.from($$('#ptsG circle')).map((c, i) => `${i},${c.getAttribute('cx')},${c.getAttribute('cy')}`);
-  const csv = 'index,x,y\n' + pts.join('\n');
+  let rows = [];
+  if (backendState.lastLmData && Array.isArray(backendState.lastLmData.landmarks) && backendState.lastLmData.landmarks.length > 0) {
+    rows = backendState.lastLmData.landmarks.map((p, i) => `${p.id ?? i},${p.x},${p.y}`);
+  } else {
+    rows = Array.from($$('#ptsG circle')).map((c, i) => `${i},${c.getAttribute('cx')},${c.getAttribute('cy')}`);
+  }
+  const csv = 'index,x,y\n' + rows.join('\n');
   download('landmarks.csv', csv, 'text/csv');
+  toast('Landmark CSV exported.', 'success');
 });
 
 if ($('#btnExportJSON')) $('#btnExportJSON').addEventListener('click', () => {
-  const points = Array.from($$('#ptsG circle')).map((c, i) => ({
-    index: i,
-    x: Number(c.getAttribute('cx')),
-    y: Number(c.getAttribute('cy')),
-  }));
+  let points = [];
+  if (backendState.lastLmData && Array.isArray(backendState.lastLmData.landmarks) && backendState.lastLmData.landmarks.length > 0) {
+    points = backendState.lastLmData.landmarks.map((p, i) => ({
+      index: p.id ?? i,
+      x: Number(p.x),
+      y: Number(p.y),
+      method: backendState.lastLmData.method || '',
+    }));
+  } else {
+    points = Array.from($$('#ptsG circle')).map((c, i) => ({
+      index: i,
+      x: Number(c.getAttribute('cx')),
+      y: Number(c.getAttribute('cy')),
+      method: 'svg-fallback',
+    }));
+  }
   download('landmarks.json', JSON.stringify({ pointCount: points.length, points }, null, 2), 'application/json');
   toast('Landmark JSON exported.', 'success');
 });
 
-if ($('#btnRunPP')) $('#btnRunPP').addEventListener('click', () => {
-  const conf = Number($('#sliderConf')?.value || 85) / 100;
-  const pad = Number($('#sliderPad')?.value || 20);
-  toast(`Preprocessing completed (conf ${conf.toFixed(2)}, pad ${pad}%).`, 'success');
+if ($('#btnRunPP')) $('#btnRunPP').addEventListener('click', async function () {
+  if (!appState.imageDataUrl) { toast('Upload an image first.', 'warning'); return; }
+  const btn = this;
+  btn.disabled = true;
+  btn.textContent = '⧗ Processing…';
+  try {
+    const blob = await getCurrentImageBlob();
+    const size = parseInt($('#selectResize')?.value || '256', 10);
+    const grayscale = Boolean($('#radioGray')?.classList.contains('active-radio'));
+    // Extra controls — send all UI values to backend
+    const confidence = Number($('#sliderConf')?.value || 85) / 100;
+    const padding    = Number($('#sliderPad')?.value  || 20);
+    const normVal    = $('#segNorm .seg-btn.active')?.dataset.val   || '1';
+    const interpVal  = $('#segInterp .seg-btn.active')?.dataset.val || 'bicubic';
+    const detectorVal= $('#segDetector .seg-btn.active')?.dataset.val || 'hog';
+    const fd = new FormData();
+    fd.append('image', blob, appState.fileName || 'input.jpg');
+    fd.append('size', String(size));
+    fd.append('grayscale', String(grayscale));
+    fd.append('confidence', String(confidence));
+    fd.append('padding', String(padding));
+    fd.append('norm', normVal);
+    fd.append('interp', interpVal);
+    fd.append('detector', detectorVal);
+    const res = await fetch('/api/preprocess', { method: 'POST', body: fd });
+    const data = await res.json();
+    if (!res.ok || !data.ok) throw new Error(data.error || 'Preprocessing failed.');
+
+    // ── Update stat displays ──
+    const sizeLabel = `${data.width}×${data.height}`;
+    const colorLabel = data.grayscale ? 'Gray' : 'RGB';
+    const normLabel = normVal === '255' ? '0 – 255' : normVal === 'bipolar' ? '−1 – 1' : '0 – 1';
+    if ($('#ppOutSize'))  $('#ppOutSize').textContent  = sizeLabel;
+    if ($('#ppOutNorm'))  $('#ppOutNorm').textContent  = normLabel;
+    if ($('#ppOutColor')) $('#ppOutColor').textContent = colorLabel;
+    if ($('#ppStatRes'))  $('#ppStatRes').textContent  = sizeLabel;
+    if ($('#ppStatColor'))$('#ppStatColor').textContent = colorLabel;
+
+    // ── Show result image in the hero face wrap ──
+    if (data.saved) {
+      const heroWrap = document.querySelector('#page-preprocess .hero-face-wrap');
+      if (heroWrap) {
+        let resultImg = heroWrap.querySelector('#ppResultImg');
+        if (!resultImg) {
+          resultImg = document.createElement('img');
+          resultImg.id = 'ppResultImg';
+          resultImg.alt = 'Preprocessed result';
+          resultImg.style.cssText = [
+            'position:absolute', 'inset:0', 'width:100%', 'height:100%',
+            'object-fit:cover', 'border-radius:inherit', 'z-index:2',
+            data.grayscale ? 'filter:grayscale(1)' : '',
+          ].filter(Boolean).join(';');
+          heroWrap.style.position = 'relative';
+          heroWrap.appendChild(resultImg);
+        } else {
+          resultImg.style.filter = data.grayscale ? 'grayscale(1)' : '';
+        }
+        resultImg.src = '/' + data.saved + '?t=' + Date.now(); // cache-bust
+      }
+    }
+
+    toast(`Preprocessed → ${data.width}×${data.height}${data.grayscale ? ' grayscale' : ' color'} · ${data.durationMs} ms`, 'success');
+  } catch (err) {
+    toast('Preprocessing error: ' + err.message, 'error');
+  } finally {
+    btn.disabled = false;
+    btn.innerHTML = '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><polygon points="5 3 19 12 5 21 5 3"/></svg> Run Pipeline';
+  }
 });
 
 if ($('#btnResetPP')) $('#btnResetPP').addEventListener('click', () => {
@@ -424,6 +1080,24 @@ if ($('#btnResetPP')) $('#btnResetPP').addEventListener('click', () => {
   normBtns.forEach(btn => btn.classList.remove('active'));
   const normDefault = $('#segNorm .seg-btn[data-val="1"]');
   if (normDefault) normDefault.classList.add('active');
+  // Also reset the seg buttons for detector and interp
+  ['#segDetector', '#segInterp'].forEach(sel => {
+    const grp = $(sel);
+    if (!grp) return;
+    grp.querySelectorAll('.seg-btn').forEach(b => b.classList.remove('active'));
+    grp.querySelector('.seg-btn')?.classList.add('active');
+  });
+  // Reset radio cards to RGB
+  $('#radioRGB')?.classList.add('active-radio');
+  $('#radioGray')?.classList.remove('active-radio');
+  // Remove result image overlay
+  document.querySelector('#page-preprocess #ppResultImg')?.remove();
+  // Reset stat labels
+  if ($('#ppOutSize'))   $('#ppOutSize').textContent   = '256×256';
+  if ($('#ppOutNorm'))   $('#ppOutNorm').textContent   = '0 – 1';
+  if ($('#ppOutColor'))  $('#ppOutColor').textContent  = 'RGB';
+  if ($('#ppStatRes'))   $('#ppStatRes').textContent   = '256×256';
+  if ($('#ppStatColor')) $('#ppStatColor').textContent = 'RGB';
   toast('Preprocessing controls reset.', 'info');
 });
 
@@ -479,10 +1153,31 @@ function saveSvgAsPng(svgEl, fileName) {
 }
 
 if ($('#btnSaveExpr')) $('#btnSaveExpr').addEventListener('click', () => {
-  saveSvgAsPng($('#exprSvg'), 'expression-result.png');
+  const cvs = document.getElementById('exprTransformedCanvas');
+  if (cvs && cvs.style.display !== 'none' && cvs.width > 0) {
+    cvs.toBlob(blob => {
+      if (!blob) { toast('Export failed.', 'error'); return; }
+      const a = document.createElement('a');
+      a.href = URL.createObjectURL(blob);
+      a.download = 'expression-result.png';
+      a.click();
+      URL.revokeObjectURL(a.href);
+      toast('Expression result saved.', 'success');
+    }, 'image/png');
+  } else {
+    saveSvgAsPng($('#exprSvg'), 'expression-result.png');
+  }
 });
 
 if ($('#btnSaveAging')) $('#btnSaveAging').addEventListener('click', () => {
+  if (backendState.lastAgingDataUrl) {
+    const a = document.createElement('a');
+    a.href = backendState.lastAgingDataUrl;
+    a.download = 'aging-result.jpg';
+    a.click();
+    toast('Aging result saved.', 'success');
+    return;
+  }
   const agingSvg = $('#page-aging .aging-side-card-active .face-svg');
   saveSvgAsPng(agingSvg, 'aging-result.png');
 });
@@ -495,23 +1190,91 @@ if ($('#btnCompareAging')) $('#btnCompareAging').addEventListener('click', () =>
 });
 
 /* ═══════════════════ APPLY WARP FEEDBACK ═══════════════════ */
-if ($('#btnApplyExpr')) $('#btnApplyExpr').addEventListener('click', function () {
-  this.textContent = '✓ Warp Applied';
-  this.style.background = 'linear-gradient(135deg,#10b981,#059669)';
-  toast('Expression warp applied!', 'success');
-  setTimeout(() => { this.textContent = '▶ Apply Warp'; this.style.background = ''; }, 1500);
+if ($('#btnApplyExpr')) $('#btnApplyExpr').addEventListener('click', async function () {
+  if (!appState.imageDataUrl) { toast('Upload an image first.', 'warning'); return; }
+
+  const btn = this;
+  const prevText = btn.innerHTML;
+  btn.disabled = true;
+  btn.textContent = '⧗ Applying...';
+
+  try {
+    const blob = await getCurrentImageBlob();
+    if (!blob) throw new Error('No input image available.');
+
+    const fd = new FormData();
+    fd.append('image', blob, appState.fileName || 'input.jpg');
+    fd.append('smile', String(Number($('#sSmile')?.value || 0)));
+    fd.append('brow', String(Number($('#sBrow')?.value || 0)));
+    fd.append('lip', String(Number($('#sLip')?.value || 0)));
+    fd.append('slim', String(Number($('#sSlim')?.value || 0)));
+
+    const res = await fetch('/api/transform', { method: 'POST', body: fd });
+    const data = await res.json();
+    if (!res.ok || !data.ok || !data.image) {
+      throw new Error(data.error || 'Expression transform failed.');
+    }
+
+    const outUrl = `data:image/jpeg;base64,${data.image}`;
+    backendState.lastExprDataUrl = outUrl;
+    backendState.lastAgingDataUrl = '';
+    backendState.analysisLoaded = false;
+    renderExpressionCanvasFromDataUrl(outUrl);
+    toast(`Expression transform complete (${data.durationMs || 0} ms).`, 'success');
+  } catch (err) {
+    toast(`Expression transform error: ${err.message}`, 'error');
+  } finally {
+    btn.disabled = false;
+    btn.innerHTML = prevText;
+  }
 });
 
-if ($('#btnSimulate')) $('#btnSimulate').addEventListener('click', function () {
-  const span = this.querySelector('span') || this;
-  span.textContent = '⧗ Processing...';
-  this.disabled = true;
-  toast('Aging simulation applied!', 'success');
-  setTimeout(() => {
-    span.textContent = 'Apply Aging Effect';
-    this.disabled = false;
-    updateAnalysisMetrics();
-  }, 1600);
+if ($('#btnSimulate')) $('#btnSimulate').addEventListener('click', async function () {
+  if (!appState.imageDataUrl) {
+    toast('Upload an image first.', 'warning');
+    return;
+  }
+
+  const btn = this;
+  const prev = btn.textContent;
+  btn.textContent = '⧗ Processing...';
+  btn.disabled = true;
+
+  try {
+    const srcBlob = await buildTransformedBlobForAnalysis() || await getCurrentImageBlob();
+    if (!srcBlob) throw new Error('No source image found for aging.');
+
+    const fd = new FormData();
+    fd.append('image', srcBlob, 'aging-input.jpg');
+    fd.append('mode', $('#ageMode .seg-btn.active')?.dataset.v || 'aging');
+    fd.append('method', $('#ageMethod .seg-btn.active')?.dataset.v || 'freq');
+    fd.append('years', String(Number($('#sTargetAge')?.value || 10)));
+    fd.append('strength', String(Number($('#sAge')?.value || 50) / 100));
+    fd.append('contrast', String(Number($('#sContrast')?.value || 50) / 100));
+    fd.append('tone', String(Number($('#sTone')?.value || 50) / 100));
+    fd.append('noise', String(Number($('#sNoise')?.value || 0) / 100));
+    fd.append('detail', String(Number($('#sDetail')?.value || 50) / 100));
+    fd.append('deterministic', 'true');
+    fd.append('hpf', $('#selHPF')?.value || 'gaussian_hpf');
+    fd.append('lpf', $('#selLPF')?.value || 'gaussian_lpf');
+
+    const res = await fetch('/api/aging', { method: 'POST', body: fd });
+    const data = await res.json();
+    if (!res.ok || !data.ok || !data.image) {
+      throw new Error(data.error || 'Aging simulation failed.');
+    }
+
+    backendState.lastAgingDataUrl = `data:image/jpeg;base64,${data.image}`;
+    backendState.analysisLoaded = false;
+    syncAgingPhotoPanels();
+    toast(`Aging simulation applied (${data.durationMs || 0} ms).`, 'success');
+    fetchAnalysisFromBackend(true);
+  } catch (err) {
+    toast(`Aging simulation error: ${err.message}`, 'error');
+  } finally {
+    btn.textContent = prev || 'Apply Aging Effect';
+    btn.disabled = false;
+  }
 });
 
 if ($('#btnAnalysisCsv')) $('#btnAnalysisCsv').addEventListener('click', () => {
@@ -546,6 +1309,8 @@ if (specMode) {
   specMode.querySelectorAll('.seg-btn').forEach(btn => {
     btn.addEventListener('click', () => {
       const isPhase = btn.dataset.v === 'phase';
+      backendState.spectrumMode = isPhase ? 'phase' : 'mag';
+      renderSpectrumImages(backendState.spectrumMode);
       const titles = $$('#page-analysis .spec-title');
       if (titles[0]) titles[0].textContent = isPhase ? 'Original (Phase)' : 'Original';
       if (titles[1]) titles[1].textContent = isPhase ? 'Transformed (Phase)' : 'Transformed';
@@ -565,7 +1330,21 @@ function setRingProgress(el, percent) {
   el.setAttribute('stroke-dasharray', `${(circumference * p / 100).toFixed(1)} ${circumference}`);
 }
 
+let _analysisDebounceTimer = null;
+
 function updateAnalysisMetrics() {
+  // When a real image is loaded, always use real backend data — never overwrite with fake values.
+  if (appState.imageDataUrl) {
+    if (!backendState.lastExprDataUrl && !backendState.lastAgingDataUrl) {
+      return;
+    }
+    backendState.analysisLoaded = false;
+    clearTimeout(_analysisDebounceTimer);
+    _analysisDebounceTimer = setTimeout(() => fetchAnalysisFromBackend(true), 700);
+    return;
+  }
+
+  // No image loaded → show placeholder demo values based on slider positions
   const exprAverage = (
     Number($('#sSmile')?.value || 0) +
     Number($('#sBrow')?.value || 0) +
@@ -601,6 +1380,9 @@ function updateAnalysisMetrics() {
   if ($('#enHF')) $('#enHF').innerHTML = `${hf.toFixed(1)} <small>×10⁶</small>`;
   if ($('#enLF')) $('#enLF').innerHTML = `${lf.toFixed(1)} <small>×10⁷</small>`;
   if ($('#enRatio')) $('#enRatio').textContent = ratio.toFixed(3);
+  if ($('#anTblHfLf')) $('#anTblHfLf').textContent = ratio.toFixed(6);
+  if ($('#anTblHf')) $('#anTblHf').textContent = (hf * 1e6).toFixed(2);
+  if ($('#anTblLf')) $('#anTblLf').textContent = (lf * 1e7).toFixed(2);
 
   if ($('#enFillTotal')) $('#enFillTotal').style.width = `${clamp(total / 10 * 100, 20, 100)}%`;
   if ($('#enFillHF')) $('#enFillHF').style.width = `${clamp(hf / 8 * 100, 10, 100)}%`;
@@ -717,6 +1499,10 @@ const origNav = nav;
 nav = function (page) {
   origNav(page);
   updatePipelineStrip(page);
+  if (page === 'landmarks') { fetchLandmarksFromBackend(); setTimeout(syncLandmarkPhotoBg, 60); }
+  if (page === 'expression') setTimeout(syncExpressionPhotoPanels, 80);
+  if (page === 'aging') setTimeout(syncAgingPhotoPanels, 60);
+  if (page === 'analysis') fetchAnalysisFromBackend(true);
   window.scrollTo({ top: 0, behavior: 'smooth' });
   requestAnimationFrame(() => requestAnimationFrame(initReveal));
 };

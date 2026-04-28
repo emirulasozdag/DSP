@@ -1479,9 +1479,9 @@ textarea {
 
 .lm-canvas {
   min-height: 420px;
-  display: grid;
-  place-items: center;
+  display: block;
   position: relative;
+  overflow: hidden;
   background:
     radial-gradient(circle at 50% 42%, rgba(139, 92, 246, 0.09), transparent 56%),
     radial-gradient(circle at 72% 70%, rgba(6, 182, 212, 0.06), transparent 40%),
@@ -1489,7 +1489,10 @@ textarea {
 }
 
 .lm-svg {
-  width: min(88%, 400px);
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
 }
 
 .lm-canvas-footer {

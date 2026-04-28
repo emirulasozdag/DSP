@@ -744,6 +744,13 @@
       </div>
 
       <div class="page-act-row">
+        <button class="btn btn-primary btn-sm" id="btnRunLM">
+          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"
+            stroke-linecap="round" stroke-linejoin="round">
+            <circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/>
+          </svg>
+          Detect Landmarks
+        </button>
         <button class="btn btn-outline btn-sm" id="btnExportCSV">
           <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"
             stroke-linecap="round" stroke-linejoin="round">
@@ -1001,8 +1008,8 @@
           <!-- Footer HUD -->
           <div class="lm-canvas-footer">
             <div class="lm-canvas-status">
-              <div class="lm-status-dot"></div>
-              <span>Detection complete &middot; 68/68 pts</span>
+              <div class="lm-status-dot" id="lmStatusDot"></div>
+              <span id="lmStatusText">Awaiting detection…</span>
             </div>
             <span class="lm-coord-live" id="lmCoordDisplay">x: — &nbsp; y: —</span>
             <span style="color:var(--indigo);font-weight:700">dlib 68-pt v1.0</span>
@@ -1046,18 +1053,18 @@
                 <!-- track -->
                 <circle cx="50" cy="50" r="40" fill="none" stroke="rgba(255,255,255,0.06)" stroke-width="9" />
                 <!-- 99.2%: circumference=251.3, fill=249.3 -->
-                <circle cx="50" cy="50" r="40" fill="none" stroke="url(#lmAccGrad)" stroke-width="9"
+                <circle id="lmAccRing" cx="50" cy="50" r="40" fill="none" stroke="url(#lmAccGrad)" stroke-width="9"
                   stroke-dasharray="249.3 251.3" stroke-dashoffset="62.8" stroke-linecap="round"
                   style="filter:drop-shadow(0 0 4px rgba(167,139,250,0.5))" />
               </svg>
               <div class="lm-acc-val">
-                <span style="font-size:1.3rem;color:var(--emerald);line-height:1">99.2</span>
+                <span id="lmConfText" style="font-size:1.3rem;color:var(--emerald);line-height:1">99.2</span>
                 <small style="font-size:0.5rem;color:var(--ink-dim);letter-spacing:0.1em">CONF %</small>
               </div>
             </div>
             <div style="display:flex;justify-content:center;gap:22px;margin-top:14px">
               <div style="text-align:center">
-                <div style="font-family:'JetBrains Mono',monospace;font-size:1rem;font-weight:800;color:var(--indigo)">
+                <div id="lmPtsCount" style="font-family:'JetBrains Mono',monospace;font-size:1rem;font-weight:800;color:var(--indigo)">
                   68</div>
                 <div
                   style="font-size:0.56rem;color:var(--ink-dim);text-transform:uppercase;letter-spacing:0.08em;margin-top:2px">
@@ -1071,7 +1078,7 @@
                   Regions</div>
               </div>
               <div style="text-align:center">
-                <div style="font-family:'JetBrains Mono',monospace;font-size:1rem;font-weight:800;color:var(--cyan)">
+                <div id="lmLatencyVal" style="font-family:'JetBrains Mono',monospace;font-size:1rem;font-weight:800;color:var(--cyan)">
                   12ms</div>
                 <div
                   style="font-size:0.56rem;color:var(--ink-dim);text-transform:uppercase;letter-spacing:0.08em;margin-top:2px">
@@ -1143,7 +1150,7 @@
             </div>
             <div class="lm-conf-row">
               <span class="lm-conf-label">Detection Confidence</span>
-              <span class="lm-conf-badge">99.2%</span>
+              <span class="lm-conf-badge" id="lmConfBadge">—</span>
             </div>
           </div>
 
@@ -1190,16 +1197,16 @@
 
       <!-- Stats bar -->
       <div class="hero-stats" style="margin-top:18px">
-        <div class="hstat"><span class="hstat-val">68</span>
+        <div class="hstat"><span class="hstat-val" id="lmStatPts">—</span>
           <div class="hstat-label">Landmarks</div>
         </div>
         <div class="hstat"><span class="hstat-val">5</span>
           <div class="hstat-label">Regions</div>
         </div>
-        <div class="hstat"><span class="hstat-val">99.2%</span>
+        <div class="hstat"><span class="hstat-val" id="lmStatConf">—</span>
           <div class="hstat-label">Confidence</div>
         </div>
-        <div class="hstat"><span class="hstat-val">dlib</span>
+        <div class="hstat"><span class="hstat-val" id="lmStatBackend">—</span>
           <div class="hstat-label">Backend</div>
         </div>
       </div>
@@ -1928,7 +1935,7 @@
       </div>
 
       <div class="page-act-row">
-        <button class="btn btn-outline btn-sm">
+        <button class="btn btn-outline btn-sm" id="btnAnalysisCsv">
           <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"
             stroke-linecap="round" stroke-linejoin="round">
             <path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4" />
@@ -2103,6 +2110,42 @@
               <div class="qm-label">SSIM</div>
               <div class="qm-val" id="qmSsimVal">0.853</div>
             </div>
+          </div>
+          <div style="margin-top:14px;border:1px solid rgba(255,255,255,.08);border-radius:10px;overflow:hidden;background:rgba(8,12,20,.45)">
+            <table style="width:100%;border-collapse:collapse;font-size:.78rem">
+              <thead>
+                <tr style="background:rgba(255,255,255,.03)">
+                  <th style="text-align:left;padding:10px 12px;color:var(--ink-dim);font-weight:700">Metric</th>
+                  <th style="text-align:left;padding:10px 12px;color:var(--ink-dim);font-weight:700">Value</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr style="border-top:1px solid rgba(255,255,255,.06)">
+                  <td style="padding:9px 12px;color:var(--ink-soft)">MSE</td>
+                  <td id="anTblMse" style="padding:9px 12px;color:var(--ink)">124.3800</td>
+                </tr>
+                <tr style="border-top:1px solid rgba(255,255,255,.06)">
+                  <td style="padding:9px 12px;color:var(--ink-soft)">PSNR</td>
+                  <td id="anTblPsnr" style="padding:9px 12px;color:var(--ink)">27.1900</td>
+                </tr>
+                <tr style="border-top:1px solid rgba(255,255,255,.06)">
+                  <td style="padding:9px 12px;color:var(--ink-soft)">SSIM</td>
+                  <td id="anTblSsim" style="padding:9px 12px;color:var(--ink)">0.8530</td>
+                </tr>
+                <tr style="border-top:1px solid rgba(255,255,255,.06)">
+                  <td style="padding:9px 12px;color:var(--ink-soft)">HF / LF Ratio</td>
+                  <td id="anTblHfLf" style="padding:9px 12px;color:var(--ink)">0.054000</td>
+                </tr>
+                <tr style="border-top:1px solid rgba(255,255,255,.06)">
+                  <td style="padding:9px 12px;color:var(--ink-soft)">High Frequency Energy</td>
+                  <td id="anTblHf" style="padding:9px 12px;color:var(--ink)">4800000.00</td>
+                </tr>
+                <tr style="border-top:1px solid rgba(255,255,255,.06)">
+                  <td style="padding:9px 12px;color:var(--ink-soft)">Low Frequency Energy</td>
+                  <td id="anTblLf" style="padding:9px 12px;color:var(--ink)">89000000.00</td>
+                </tr>
+              </tbody>
+            </table>
           </div>
         </div><!-- /quality card -->
 
