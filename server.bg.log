@@ -1,0 +1,23 @@
+INFO: Created TensorFlow Lite XNNPACK delegate for CPU.
+WARNING: All log messages before absl::InitializeLog() is called are written to STDERR
+W0000 00:00:1777404759.321308   11400 inference_feedback_manager.cc:114] Feedback manager requires a model with a single signature inference. Disabling support for feedback tensors.
+MediaPipe FaceMesh initialized successfully via mp.solutions.
+Using MediaPipe: True
+ * Serving Flask app 'app'
+ * Debug mode: off
+W0000 00:00:1777404759.335412   17168 inference_feedback_manager.cc:114] Feedback manager requires a model with a single signature inference. Disabling support for feedback tensors.
+WARNING: This is a development server. Do not use it in a production deployment. Use a production WSGI server instead.
+ * Running on http://127.0.0.1:8080
+Press CTRL+C to quit
+127.0.0.1 - - [28/Apr/2026 22:32:48] "GET /api/health HTTP/1.1" 200 -
+127.0.0.1 - - [28/Apr/2026 22:33:18] "GET / HTTP/1.1" 200 -
+127.0.0.1 - - [28/Apr/2026 22:33:18] "GET /style.css HTTP/1.1" 304 -
+127.0.0.1 - - [28/Apr/2026 22:33:18] "GET /app.js HTTP/1.1" 200 -
+127.0.0.1 - - [28/Apr/2026 22:36:47] "GET / HTTP/1.1" 200 -
+127.0.0.1 - - [28/Apr/2026 22:36:47] "GET /style.css HTTP/1.1" 304 -
+127.0.0.1 - - [28/Apr/2026 22:36:47] "GET /app.js HTTP/1.1" 200 -
+W0000 00:00:1777405047.856839   15156 landmark_projection_calculator.cc:186] Using NORM_RECT without IMAGE_DIMENSIONS is only supported for the square ROI. Provide IMAGE_DIMENSIONS or use PROJECTION_MATRIX.
+127.0.0.1 - - [28/Apr/2026 22:37:27] "POST /api/landmarks HTTP/1.1" 200 -
+127.0.0.1 - - [28/Apr/2026 22:39:17] "POST /api/aging HTTP/1.1" 200 -
+127.0.0.1 - - [28/Apr/2026 22:39:20] "POST /api/analysis HTTP/1.1" 200 -
+127.0.0.1 - - [28/Apr/2026 22:39:22] "POST /api/analysis HTTP/1.1" 200 -

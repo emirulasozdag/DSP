@@ -75,6 +75,7 @@ const backendState = {
   lastLmData: null,   // cached last successful detection response
   lastExprDataUrl: '',
   lastAgingDataUrl: '',
+  analysisData: null,
   analysisSpectra: null,
   spectrumMode: 'mag',
 };
@@ -523,11 +524,194 @@ function renderSpectrumImages(mode = backendState.spectrumMode || 'mag') {
   applyToBox(boxes[1], spectra.transformed[key]);
 }
 
+function setAnalysisStatus(label, state = 'waiting') {
+  const tag = $('#analysisStatusTag') || document.querySelector('#page-analysis .tag-done');
+  if (!tag) return;
+  tag.textContent = label;
+  tag.classList.toggle('tag-done', state === 'done');
+}
+
+function formatMetricValue(value, digits = 2, suffix = '') {
+  const n = Number(value);
+  if (!Number.isFinite(n)) return '--';
+  return `${n.toFixed(digits)}${suffix}`;
+}
+
+function formatCompactEnergy(value) {
+  const n = Number(value);
+  if (!Number.isFinite(n)) return '--';
+  const abs = Math.abs(n);
+  if (abs >= 1e9) return `${(n / 1e9).toFixed(2)}B`;
+  if (abs >= 1e6) return `${(n / 1e6).toFixed(2)}M`;
+  if (abs >= 1e3) return `${(n / 1e3).toFixed(2)}K`;
+  return n.toFixed(2);
+}
+
+function formatScaledEnergyHtml(value) {
+  const n = Number(value);
+  if (!Number.isFinite(n)) return '--';
+  const abs = Math.abs(n);
+  if (abs >= 1e9) return `${(n / 1e9).toFixed(2)} <small>x10^9</small>`;
+  if (abs >= 1e6) return `${(n / 1e6).toFixed(2)} <small>x10^6</small>`;
+  if (abs >= 1e3) return `${(n / 1e3).toFixed(2)} <small>x10^3</small>`;
+  return n.toFixed(2);
+}
+
+function signedPercent(value, digits = 1) {
+  const n = Number(value);
+  if (!Number.isFinite(n)) return '--';
+  const sign = n > 0 ? '+' : '';
+  return `${sign}${n.toFixed(digits)}%`;
+}
+
+function verdictClass(el, cls) {
+  if (!el) return;
+  el.classList.remove('mc-v-ok', 'mc-v-info', 'mc-v-changed');
+  if (cls) el.classList.add(cls);
+}
+
+function setComparisonCard(index, beforeText, afterText, beforeWidth, afterWidth, verdict, vClass) {
+  const card = document.querySelectorAll('#page-analysis .mc-card')[index];
+  if (!card) return;
+  const rows = card.querySelectorAll('.mc-bar-row');
+  const beforeRow = rows[0];
+  const afterRow = rows[1];
+  if (beforeRow) {
+    const fill = beforeRow.querySelector('.mc-fill');
+    const num = beforeRow.querySelector('.mc-num');
+    if (fill) fill.style.width = `${clamp(beforeWidth, 0, 100)}%`;
+    if (num) num.textContent = beforeText;
+  }
+  if (afterRow) {
+    const fill = afterRow.querySelector('.mc-fill');
+    const num = afterRow.querySelector('.mc-num');
+    if (fill) fill.style.width = `${clamp(afterWidth, 0, 100)}%`;
+    if (num) num.textContent = afterText;
+  }
+  const verdictEl = card.querySelector('.mc-verdict');
+  if (verdictEl) verdictEl.textContent = verdict;
+  verdictClass(verdictEl, vClass);
+}
+
+function clearSpectrumImages() {
+  document.querySelectorAll('#page-analysis .spec-grid .spec-box').forEach(box => {
+    const img = box.querySelector('img.spec-img-render');
+    if (img) img.remove();
+    const oldSvg = box.querySelector('svg');
+    if (oldSvg) oldSvg.style.display = '';
+  });
+}
+
+function clearAnalysisMetrics(message = 'Run a transform to compute analysis.') {
+  backendState.analysisLoaded = false;
+  backendState.analysisData = null;
+  backendState.analysisSpectra = null;
+  setAnalysisStatus('Waiting', 'waiting');
+  clearSpectrumImages();
+
+  if ($('#qmMsePct')) $('#qmMsePct').textContent = '--';
+  if ($('#qmPsnrPct')) $('#qmPsnrPct').textContent = '--';
+  if ($('#qmSsimPct')) $('#qmSsimPct').textContent = '--';
+  if ($('#qmMseVal')) $('#qmMseVal').textContent = '--';
+  if ($('#qmPsnrVal')) $('#qmPsnrVal').textContent = '--';
+  if ($('#qmSsimVal')) $('#qmSsimVal').textContent = '--';
+  if ($('#anTblMse')) $('#anTblMse').textContent = '--';
+  if ($('#anTblPsnr')) $('#anTblPsnr').textContent = '--';
+  if ($('#anTblSsim')) $('#anTblSsim').textContent = '--';
+  if ($('#enTotal')) $('#enTotal').textContent = '--';
+  if ($('#enHF')) $('#enHF').textContent = '--';
+  if ($('#enLF')) $('#enLF').textContent = '--';
+  if ($('#enRatio')) $('#enRatio').textContent = '--';
+  if ($('#anTblHfLf')) $('#anTblHfLf').textContent = '--';
+  if ($('#anTblHf')) $('#anTblHf').textContent = '--';
+  if ($('#anTblLf')) $('#anTblLf').textContent = '--';
+  ['enFillTotal', 'enFillHF', 'enFillLF', 'enFillRatio'].forEach(id => {
+    const el = $(`#${id}`);
+    if (el) el.style.width = '0%';
+  });
+  setRingProgress($('#qmMseRing'), 0);
+  setRingProgress($('#qmPsnrRing'), 0);
+  setRingProgress($('#qmSsimRing'), 0);
+
+  for (let i = 0; i < 6; i++) {
+    setComparisonCard(i, '--', '--', 0, 0, message, 'mc-v-info');
+  }
+}
+
 function applyAnalysisFromBackend(data) {
   const mse = Number(data.mse || 0);
   const psnr = Number(data.psnr || 0);
   const ssim = Number(data.ssim || 0);
   const energy = data.energy || {};
+  const comparison = data.energyComparison || {};
+  const origEnergy = comparison.original || {};
+  const transEnergy = comparison.transformed || energy || {};
+  const deltaEnergy = comparison.delta || {};
+  const luminance = data.luminance || {};
+  const origLum = luminance.original || {};
+  const transLum = luminance.transformed || {};
+
+  backendState.analysisData = data;
+  setAnalysisStatus('Computed', 'done');
+
+  if (data.spectrum && data.spectrum.original && data.spectrum.transformed) {
+    backendState.analysisSpectra = data.spectrum;
+    renderSpectrumImages(backendState.spectrumMode || 'mag');
+  }
+
+  if ($('#qmMseVal')) $('#qmMseVal').textContent = mse.toFixed(2);
+  if ($('#qmPsnrVal')) $('#qmPsnrVal').textContent = `${psnr.toFixed(2)} dB`;
+  if ($('#qmSsimVal')) $('#qmSsimVal').textContent = ssim.toFixed(3);
+  if ($('#anTblMse')) $('#anTblMse').textContent = mse.toFixed(4);
+  if ($('#anTblPsnr')) $('#anTblPsnr').textContent = psnr.toFixed(4);
+  if ($('#anTblSsim')) $('#anTblSsim').textContent = ssim.toFixed(4);
+
+  const msePercent = clamp((Math.sqrt(Math.max(mse, 0)) / 255) * 100, 0, 100);
+  const psnrPercent = clamp((psnr / 40) * 100, 5, 98);
+  const ssimPercent = clamp(ssim * 100, 5, 98);
+  if ($('#qmMsePct')) $('#qmMsePct').textContent = `${Math.round(msePercent)}%`;
+  if ($('#qmPsnrPct')) $('#qmPsnrPct').textContent = `${Math.round(psnrPercent)}%`;
+  if ($('#qmSsimPct')) $('#qmSsimPct').textContent = `${Math.round(ssimPercent)}%`;
+
+  if ($('#enTotal')) $('#enTotal').innerHTML = formatScaledEnergyHtml(transEnergy.total);
+  if ($('#enHF')) $('#enHF').innerHTML = formatScaledEnergyHtml(transEnergy.high);
+  if ($('#enLF')) $('#enLF').innerHTML = formatScaledEnergyHtml(transEnergy.low);
+  if ($('#enRatio')) $('#enRatio').textContent = formatMetricValue(transEnergy.hfLfRatio, 3);
+  if ($('#anTblHfLf')) $('#anTblHfLf').textContent = formatMetricValue(transEnergy.hfLfRatio, 6);
+  if ($('#anTblHf')) $('#anTblHf').textContent = formatMetricValue(transEnergy.high, 2);
+  if ($('#anTblLf')) $('#anTblLf').textContent = formatMetricValue(transEnergy.low, 2);
+
+  const maxEnergy = Math.max(Number(origEnergy.total || 0), Number(transEnergy.total || 0), 1);
+  const maxHigh = Math.max(Number(origEnergy.high || 0), Number(transEnergy.high || 0), 1);
+  const maxLow = Math.max(Number(origEnergy.low || 0), Number(transEnergy.low || 0), 1);
+  const ratioMax = Math.max(Number(origEnergy.hfLfRatio || 0), Number(transEnergy.hfLfRatio || 0), 0.01);
+
+  if ($('#enFillTotal')) $('#enFillTotal').style.width = `${clamp((Number(transEnergy.total || 0) / maxEnergy) * 100, 0, 100)}%`;
+  if ($('#enFillHF')) $('#enFillHF').style.width = `${clamp((Number(transEnergy.high || 0) / maxHigh) * 100, 0, 100)}%`;
+  if ($('#enFillLF')) $('#enFillLF').style.width = `${clamp((Number(transEnergy.low || 0) / maxLow) * 100, 0, 100)}%`;
+  if ($('#enFillRatio')) $('#enFillRatio').style.width = `${clamp((Number(transEnergy.hfLfRatio || 0) / ratioMax) * 100, 0, 100)}%`;
+
+  setRingProgress($('#qmMseRing'), msePercent);
+  setRingProgress($('#qmPsnrRing'), psnrPercent);
+  setRingProgress($('#qmSsimRing'), ssimPercent);
+
+  const origHigh = Number(origEnergy.high || 0);
+  const transHigh = Number(transEnergy.high || 0);
+  const origMean = Number(origLum.mean || 0);
+  const transMean = Number(transLum.mean || 0);
+  const origRatio = Number(origEnergy.hfLfRatio || 0);
+  const transRatio = Number(transEnergy.hfLfRatio || 0);
+  const hfDelta = Number(deltaEnergy.highPct || 0);
+  const ratioDelta = Number(deltaEnergy.hfLfRatioPct || 0);
+  const lumDelta = Number(luminance.deltaMeanPct || 0);
+
+  setComparisonCard(0, '0.00', mse.toFixed(2), 0, msePercent, mse < 1 ? 'No visible pixel change' : 'Transformation effect measured', 'mc-v-changed');
+  setComparisonCard(1, 'Original', `${psnr.toFixed(2)} dB`, 100, psnrPercent, psnr >= 30 ? 'High signal quality' : psnr >= 20 ? 'Acceptable signal quality' : 'Strong signal change detected', psnr >= 20 ? 'mc-v-ok' : 'mc-v-changed');
+  setComparisonCard(2, '1.000', ssim.toFixed(3), 100, ssimPercent, ssim >= 0.85 ? 'Structure successfully preserved' : ssim >= 0.65 ? 'Moderate structural change' : 'Large structural change', ssim >= 0.85 ? 'mc-v-ok' : 'mc-v-info');
+  setComparisonCard(3, formatCompactEnergy(origHigh), formatCompactEnergy(transHigh), (origHigh / maxHigh) * 100, (transHigh / maxHigh) * 100, `High-frequency change ${signedPercent(hfDelta)}`, Math.abs(hfDelta) < 5 ? 'mc-v-ok' : 'mc-v-info');
+  setComparisonCard(4, origMean.toFixed(1), transMean.toFixed(1), (origMean / 255) * 100, (transMean / 255) * 100, `Mean luminance shift ${signedPercent(lumDelta)}`, Math.abs(lumDelta) <= 5 ? 'mc-v-ok' : 'mc-v-info');
+  setComparisonCard(5, origRatio.toFixed(3), transRatio.toFixed(3), (origRatio / ratioMax) * 100, (transRatio / ratioMax) * 100, `HF/LF ratio change ${signedPercent(ratioDelta)}`, Math.abs(ratioDelta) < 5 ? 'mc-v-ok' : 'mc-v-info');
+  return;
 
   if (data.spectrum && data.spectrum.original && data.spectrum.transformed) {
     backendState.analysisSpectra = data.spectrum;
@@ -570,16 +754,21 @@ function applyAnalysisFromBackend(data) {
 }
 
 async function fetchAnalysisFromBackend(force = false) {
-  if (!appState.imageDataUrl) return;
+  if (!appState.imageDataUrl) {
+    clearAnalysisMetrics('Upload an image to compute analysis.');
+    return;
+  }
   if (backendState.analysisLoaded && !force) return;
   try {
     if (!backendState.lastExprDataUrl && !backendState.lastAgingDataUrl) {
+      clearAnalysisMetrics('Run Expression Warp or Aging first.');
       if (force) toast('Run Expression Warp or Aging first, then open Analysis.', 'info');
       return;
     }
     const originalBlob = await getCurrentImageBlob();
     const transformedBlob = await buildTransformedBlobForAnalysis();
     if (!originalBlob || !transformedBlob) {
+      clearAnalysisMetrics('Could not prepare images for analysis.');
       if (force) toast('Could not prepare transformed image for analysis.', 'warning');
       return;
     }
@@ -843,6 +1032,7 @@ function handleFile(file) {
       backendState.analysisLoaded = false;
       backendState.lastExprDataUrl = '';
       backendState.lastAgingDataUrl = '';
+      backendState.analysisData = null;
       backendState.analysisSpectra = null;
       uploadCard.style.display = 'none';
       previewCard.style.display = 'block';
@@ -862,6 +1052,7 @@ if ($('#btnRemove')) $('#btnRemove').addEventListener('click', () => {
   backendState.analysisLoaded = false;
   backendState.lastExprDataUrl = '';
   backendState.lastAgingDataUrl = '';
+  backendState.analysisData = null;
   backendState.analysisSpectra = null;
   backendState.landmarks = [];
   backendState.lastLmData = null;
@@ -1130,6 +1321,7 @@ if ($('#btnCapture')) $('#btnCapture').addEventListener('click', () => {
   backendState.analysisLoaded = false;
   backendState.lastExprDataUrl = '';
   backendState.lastAgingDataUrl = '';
+  backendState.analysisData = null;
   backendState.analysisSpectra = null;
   toast('Webcam frame captured!', 'success');
 });
@@ -1433,6 +1625,7 @@ if ($('#btnApplyExpr')) $('#btnApplyExpr').addEventListener('click', async funct
     backendState.lastExprDataUrl = outUrl;
     backendState.lastAgingDataUrl = '';
     backendState.analysisLoaded = false;
+    backendState.analysisData = null;
     renderExpressionCanvasFromDataUrl(outUrl);
     toast(`Expression transform complete (${data.durationMs || 0} ms).`, 'success');
   } catch (err) {
@@ -1480,6 +1673,7 @@ if ($('#btnSimulate')) $('#btnSimulate').addEventListener('click', async functio
 
     backendState.lastAgingDataUrl = `data:image/jpeg;base64,${data.image}`;
     backendState.analysisLoaded = false;
+    backendState.analysisData = null;
     syncAgingPhotoPanels();
     toast(`Aging simulation applied (${data.durationMs || 0} ms).`, 'success');
     fetchAnalysisFromBackend(true);
@@ -1492,6 +1686,10 @@ if ($('#btnSimulate')) $('#btnSimulate').addEventListener('click', async functio
 });
 
 if ($('#btnAnalysisCsv')) $('#btnAnalysisCsv').addEventListener('click', () => {
+  if (!backendState.analysisData) {
+    toast('Run analysis before exporting CSV.', 'warning');
+    return;
+  }
   const rows = [
     ['metric', 'value'],
     ['MSE', ($('#qmMseVal')?.textContent || '').trim()],
@@ -1505,6 +1703,10 @@ if ($('#btnAnalysisCsv')) $('#btnAnalysisCsv').addEventListener('click', () => {
 });
 
 if ($('#btnAnalysisPdf')) $('#btnAnalysisPdf').addEventListener('click', () => {
+  if (!backendState.analysisData) {
+    toast('Run analysis before exporting PDF.', 'warning');
+    return;
+  }
   const lines = [
     'FaceWarp DSP - Analysis Report',
     `Timestamp: ${new Date().toLocaleString()}`,
@@ -1547,9 +1749,15 @@ function setRingProgress(el, percent) {
 let _analysisDebounceTimer = null;
 
 function updateAnalysisMetrics() {
+  if (!appState.imageDataUrl) {
+    clearAnalysisMetrics('Upload an image to compute analysis.');
+    return;
+  }
+
   // When a real image is loaded, always use real backend data — never overwrite with fake values.
   if (appState.imageDataUrl) {
     if (!backendState.lastExprDataUrl && !backendState.lastAgingDataUrl) {
+      clearAnalysisMetrics('Run Expression Warp or Aging first.');
       return;
     }
     backendState.analysisLoaded = false;

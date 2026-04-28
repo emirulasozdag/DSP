@@ -278,7 +278,10 @@ def _crop_face_region(image: np.ndarray, padding_percent: float, use_detector: b
 def _fft_energy_components(gray: np.ndarray):
     spectrum = np.fft.fftshift(np.fft.fft2(gray))
     magnitude = np.abs(spectrum)
-    energy_map = magnitude ** 2
+    # Normalize FFT energy with Parseval scaling so values are comparable
+    # across image sizes instead of growing with the square of pixel count.
+    norm = float(gray.shape[0] * gray.shape[1]) ** 2
+    energy_map = (magnitude ** 2) / max(norm, 1.0)
 
     h, w = gray.shape
     cy, cx = h // 2, w // 2
@@ -302,6 +305,20 @@ def _fft_energy_components(gray: np.ndarray):
             "hfLfRatio": hf_lf_ratio,
         },
     }
+
+
+def _gray_image_stats(gray: np.ndarray):
+    gray_f = gray.astype(np.float32)
+    return {
+        "mean": float(np.mean(gray_f)),
+        "std": float(np.std(gray_f)),
+        "min": float(np.min(gray_f)),
+        "max": float(np.max(gray_f)),
+    }
+
+
+def _percent_delta(before: float, after: float) -> float:
+    return float(((after - before) / (abs(before) + 1e-9)) * 100.0)
 
 
 def _fft_visuals_b64(gray: np.ndarray):
@@ -850,9 +867,20 @@ def api_analysis():
         psnr = float(20.0 * np.log10(255.0 / np.sqrt(mse)))
     ssim = float(structural_similarity(gray_orig, gray_trans, data_range=255.0))
 
-    fft_energy = _fft_energy_components(gray_trans)
+    orig_fft = _fft_energy_components(gray_orig)
+    trans_fft = _fft_energy_components(gray_trans)
+    orig_stats = _gray_image_stats(gray_orig)
+    trans_stats = _gray_image_stats(gray_trans)
     orig_spectrum = _fft_visuals_b64(gray_orig)
     trans_spectrum = _fft_visuals_b64(gray_trans)
+
+    energy_delta = {
+        "totalPct": _percent_delta(orig_fft["energy"]["total"], trans_fft["energy"]["total"]),
+        "highPct": _percent_delta(orig_fft["energy"]["high"], trans_fft["energy"]["high"]),
+        "lowPct": _percent_delta(orig_fft["energy"]["low"], trans_fft["energy"]["low"]),
+        "hfLfRatioPct": _percent_delta(orig_fft["energy"]["hfLfRatio"], trans_fft["energy"]["hfLfRatio"]),
+    }
+    luminance_delta_pct = _percent_delta(orig_stats["mean"], trans_stats["mean"])
 
     compare = np.hstack([original, transformed])
     cv2.putText(compare, f"MSE: {mse:.2f}", (16, 28), cv2.FONT_HERSHEY_SIMPLEX, 0.75, (0, 255, 0), 2)
@@ -868,7 +896,17 @@ def api_analysis():
             "mse": round(mse, 4),
             "psnr": round(psnr, 4),
             "ssim": round(ssim, 4),
-            "energy": fft_energy["energy"],
+            "energy": trans_fft["energy"],
+            "energyComparison": {
+                "original": orig_fft["energy"],
+                "transformed": trans_fft["energy"],
+                "delta": energy_delta,
+            },
+            "luminance": {
+                "original": orig_stats,
+                "transformed": trans_stats,
+                "deltaMeanPct": luminance_delta_pct,
+            },
             "spectrum": {
                 "original": orig_spectrum,
                 "transformed": trans_spectrum,
