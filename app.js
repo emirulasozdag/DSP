@@ -842,7 +842,7 @@ function syncAgingPhotoPanels() {
     if (!img) {
       img = document.createElement('img');
       img.id = id; img.alt = '';
-      img.style.cssText = 'position:absolute;inset:0;width:100%;height:100%;object-fit:cover;border-radius:inherit;display:none;z-index:1;';
+      img.style.cssText = 'position:absolute;inset:0;width:100%;height:100%;object-fit:contain;background:#0b1220;border-radius:inherit;display:none;z-index:1;';
       wrap.prepend(img);
     }
     return img;
@@ -863,14 +863,14 @@ function syncAgingPhotoPanels() {
       afterImg.src = '';
       afterImg.style.display = 'none';
     }
-    // Keep SVGs as subtle wireframe overlays
+    // Real photos should not carry the placeholder wireframe; it cannot align to arbitrary crops.
     $$('#page-aging .aging-face-wrap .face-svg').forEach(s => {
-      s.style.position = 'relative'; s.style.zIndex = '2'; s.style.opacity = '0.25';
+      s.style.display = 'none';
     });
   } else {
     beforeImg.style.display = 'none';
     afterImg.style.display  = 'none';
-    $$('#page-aging .aging-face-wrap .face-svg').forEach(s => { s.style.opacity = ''; s.style.zIndex = ''; });
+    $$('#page-aging .aging-face-wrap .face-svg').forEach(s => { s.style.display = ''; s.style.opacity = ''; s.style.zIndex = ''; });
   }
 }
 
