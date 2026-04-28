@@ -1,6 +1,7 @@
 Flask==3.1.3
 numpy==2.4.4
 opencv-python==4.13.0.92
-mediapipe==0.10.35
+# mediapipe==0.10.35  # Python 3.13 desteklemiyor; Python <=3.12 ile kullanın.
+# Uygulama mediapipe olmadan Haar cascade fallback ile çalışır.
 scikit-image==0.26.0
 pillow==12.2.0

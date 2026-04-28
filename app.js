@@ -711,46 +711,6 @@ function applyAnalysisFromBackend(data) {
   setComparisonCard(3, formatCompactEnergy(origHigh), formatCompactEnergy(transHigh), (origHigh / maxHigh) * 100, (transHigh / maxHigh) * 100, `High-frequency change ${signedPercent(hfDelta)}`, Math.abs(hfDelta) < 5 ? 'mc-v-ok' : 'mc-v-info');
   setComparisonCard(4, origMean.toFixed(1), transMean.toFixed(1), (origMean / 255) * 100, (transMean / 255) * 100, `Mean luminance shift ${signedPercent(lumDelta)}`, Math.abs(lumDelta) <= 5 ? 'mc-v-ok' : 'mc-v-info');
   setComparisonCard(5, origRatio.toFixed(3), transRatio.toFixed(3), (origRatio / ratioMax) * 100, (transRatio / ratioMax) * 100, `HF/LF ratio change ${signedPercent(ratioDelta)}`, Math.abs(ratioDelta) < 5 ? 'mc-v-ok' : 'mc-v-info');
-  return;
-
-  if (data.spectrum && data.spectrum.original && data.spectrum.transformed) {
-    backendState.analysisSpectra = data.spectrum;
-    renderSpectrumImages(backendState.spectrumMode || 'mag');
-  }
-
-  if ($('#qmMseVal')) $('#qmMseVal').textContent = mse.toFixed(2);
-  if ($('#qmPsnrVal')) $('#qmPsnrVal').textContent = `${psnr.toFixed(2)} dB`;
-  if ($('#qmSsimVal')) $('#qmSsimVal').textContent = ssim.toFixed(3);
-  if ($('#anTblMse')) $('#anTblMse').textContent = mse.toFixed(4);
-  if ($('#anTblPsnr')) $('#anTblPsnr').textContent = psnr.toFixed(4);
-  if ($('#anTblSsim')) $('#anTblSsim').textContent = ssim.toFixed(4);
-  if ($('#anTblMse')) $('#anTblMse').textContent = mse.toFixed(4);
-  if ($('#anTblPsnr')) $('#anTblPsnr').textContent = psnr.toFixed(4);
-  if ($('#anTblSsim')) $('#anTblSsim').textContent = ssim.toFixed(4);
-
-  const msePct = clamp((mse / 220) * 100, 5, 98);
-  const psnrPct = clamp((psnr / 40) * 100, 5, 98);
-  const ssimPct = clamp(ssim * 100, 5, 98);
-  if ($('#qmMsePct')) $('#qmMsePct').textContent = `${Math.round(msePct)}%`;
-  if ($('#qmPsnrPct')) $('#qmPsnrPct').textContent = `${Math.round(psnrPct)}%`;
-  if ($('#qmSsimPct')) $('#qmSsimPct').textContent = `${Math.round(ssimPct)}%`;
-
-  if ($('#enTotal')) $('#enTotal').innerHTML = `${((energy.total || 0) / 1e7).toFixed(2)} <small>×10⁷</small>`;
-  if ($('#enHF')) $('#enHF').innerHTML = `${((energy.high || 0) / 1e6).toFixed(1)} <small>×10⁶</small>`;
-  if ($('#enLF')) $('#enLF').innerHTML = `${((energy.low || 0) / 1e7).toFixed(1)} <small>×10⁷</small>`;
-  if ($('#enRatio')) $('#enRatio').textContent = Number(energy.hfLfRatio || 0).toFixed(3);
-  if ($('#anTblHfLf')) $('#anTblHfLf').textContent = Number(energy.hfLfRatio || 0).toFixed(6);
-  if ($('#anTblHf')) $('#anTblHf').textContent = Number(energy.high || 0).toFixed(2);
-  if ($('#anTblLf')) $('#anTblLf').textContent = Number(energy.low || 0).toFixed(2);
-
-  if ($('#enFillTotal')) $('#enFillTotal').style.width = `${clamp(((energy.total || 0) / 1e8) * 100, 20, 100)}%`;
-  if ($('#enFillHF')) $('#enFillHF').style.width = `${clamp(((energy.high || 0) / 1e7) * 100, 10, 100)}%`;
-  if ($('#enFillLF')) $('#enFillLF').style.width = `${clamp(((energy.low || 0) / 1e8) * 100, 20, 100)}%`;
-  if ($('#enFillRatio')) $('#enFillRatio').style.width = `${clamp((Number(energy.hfLfRatio || 0) / 0.2) * 100, 5, 100)}%`;
-
-  setRingProgress($('#qmMseRing'), msePct);
-  setRingProgress($('#qmPsnrRing'), psnrPct);
-  setRingProgress($('#qmSsimRing'), ssimPct);
 }
 
 async function fetchAnalysisFromBackend(force = false) {
@@ -1754,66 +1714,14 @@ function updateAnalysisMetrics() {
     return;
   }
 
-  // When a real image is loaded, always use real backend data — never overwrite with fake values.
-  if (appState.imageDataUrl) {
-    if (!backendState.lastExprDataUrl && !backendState.lastAgingDataUrl) {
-      clearAnalysisMetrics('Run Expression Warp or Aging first.');
-      return;
-    }
-    backendState.analysisLoaded = false;
-    clearTimeout(_analysisDebounceTimer);
-    _analysisDebounceTimer = setTimeout(() => fetchAnalysisFromBackend(true), 700);
+  // Real image loaded — always fetch from backend, never overwrite with fake values.
+  if (!backendState.lastExprDataUrl && !backendState.lastAgingDataUrl) {
+    clearAnalysisMetrics('Run Expression Warp or Aging first.');
     return;
   }
-
-  // No image loaded → show placeholder demo values based on slider positions
-  const exprAverage = (
-    Number($('#sSmile')?.value || 0) +
-    Number($('#sBrow')?.value || 0) +
-    Number($('#sLip')?.value || 0) +
-    Number($('#sSlim')?.value || 0)
-  ) / 4 / 100;
-  const ageShift = Math.abs(Number($('#sTargetAge')?.value || 0)) / 50;
-  const ageStrength = Number($('#sAge')?.value || 50) / 100;
-  const intensity = clamp(0.12 + exprAverage * 0.38 + ageShift * 0.26 + ageStrength * 0.24, 0, 1);
-
-  const mse = 40 + intensity * 170;
-  const psnr = 36 - intensity * 12;
-  const ssim = 0.95 - intensity * 0.24;
-
-  const hf = 3.0 + intensity * 4.8;
-  const lf = 9.4 - intensity * 1.7;
-  const ratio = hf / (lf * 10);
-  const total = lf + hf / 10;
-
-  const msePct = clamp((mse - 30) / 2, 5, 98);
-  const psnrPct = clamp(((psnr - 18) / 18) * 100, 5, 98);
-  const ssimPct = clamp(ssim * 100, 5, 98);
-
-  if ($('#qmMsePct')) $('#qmMsePct').textContent = `${Math.round(msePct)}%`;
-  if ($('#qmPsnrPct')) $('#qmPsnrPct').textContent = `${Math.round(psnrPct)}%`;
-  if ($('#qmSsimPct')) $('#qmSsimPct').textContent = `${Math.round(ssimPct)}%`;
-
-  if ($('#qmMseVal')) $('#qmMseVal').textContent = mse.toFixed(2);
-  if ($('#qmPsnrVal')) $('#qmPsnrVal').textContent = `${psnr.toFixed(2)} dB`;
-  if ($('#qmSsimVal')) $('#qmSsimVal').textContent = ssim.toFixed(3);
-
-  if ($('#enTotal')) $('#enTotal').innerHTML = `${total.toFixed(2)} <small>×10⁷</small>`;
-  if ($('#enHF')) $('#enHF').innerHTML = `${hf.toFixed(1)} <small>×10⁶</small>`;
-  if ($('#enLF')) $('#enLF').innerHTML = `${lf.toFixed(1)} <small>×10⁷</small>`;
-  if ($('#enRatio')) $('#enRatio').textContent = ratio.toFixed(3);
-  if ($('#anTblHfLf')) $('#anTblHfLf').textContent = ratio.toFixed(6);
-  if ($('#anTblHf')) $('#anTblHf').textContent = (hf * 1e6).toFixed(2);
-  if ($('#anTblLf')) $('#anTblLf').textContent = (lf * 1e7).toFixed(2);
-
-  if ($('#enFillTotal')) $('#enFillTotal').style.width = `${clamp(total / 10 * 100, 20, 100)}%`;
-  if ($('#enFillHF')) $('#enFillHF').style.width = `${clamp(hf / 8 * 100, 10, 100)}%`;
-  if ($('#enFillLF')) $('#enFillLF').style.width = `${clamp(lf / 10 * 100, 20, 100)}%`;
-  if ($('#enFillRatio')) $('#enFillRatio').style.width = `${clamp(ratio / 0.12 * 100, 5, 100)}%`;
-
-  setRingProgress($('#qmMseRing'), msePct);
-  setRingProgress($('#qmPsnrRing'), psnrPct);
-  setRingProgress($('#qmSsimRing'), ssimPct);
+  backendState.analysisLoaded = false;
+  clearTimeout(_analysisDebounceTimer);
+  _analysisDebounceTimer = setTimeout(() => fetchAnalysisFromBackend(true), 700);
 }
 
 setPipelineImage('');
