@@ -25,6 +25,11 @@ RESULTS_DIR = ROOT / "results"
 UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
 RESULTS_DIR.mkdir(parents=True, exist_ok=True)
 
+# results/ klasörünü uygulama başlangıcında temizle
+for _f in RESULTS_DIR.iterdir():
+    if _f.is_file():
+        _f.unlink()
+
 app = Flask(__name__)
 
 MAX_UPLOAD_BYTES = 10 * 1024 * 1024
@@ -925,6 +930,9 @@ def _frequency_age_pipeline(
         restore = protected * np.clip(0.48 + 0.25 * (1.0 - strength), 0.0, 0.72)
         out = out * (1.0 - restore[:, :, None]) + image.astype(np.float32) * restore[:, :, None]
 
+    if mode == "aging" and intensity > 0.1:
+        out = _apply_age_hair_graying(out, image, masks, intensity, rng)
+
     meta = {
         "maskMethod": masks["maskMethod"],
         "skinHighFrequencyEnergy": round(_masked_high_frequency_energy(np.clip(out, 0, 255).astype(np.uint8), masks["skinMask"]), 4),
@@ -1635,20 +1643,7 @@ def api_aging():
             lpf=lpf,
             preserve_edges=preserve_edges,
         )
-        freq_variant, _ = _frequency_age_pipeline(
-            image=image,
-            mode=mode,
-            strength=strength,
-            years=years,
-            contrast=contrast,
-            tone=tone,
-            noise=noise,
-            detail=detail,
-            deterministic=deterministic,
-            hpf=hpf,
-            lpf=lpf,
-            preserve_edges=preserve_edges,
-        )
+        freq_variant = out
         ai_variant = out
     else:
         out, transform_meta = _frequency_age_pipeline(
@@ -1667,20 +1662,7 @@ def api_aging():
         )
         model_status = "frequency-dsp"
         freq_variant = out
-        ai_variant, _, _ = _ai_age_pipeline(
-            image=image,
-            mode=mode,
-            strength=strength,
-            years=years,
-            contrast=contrast,
-            tone=tone,
-            noise=noise,
-            detail=detail,
-            deterministic=deterministic,
-            hpf=hpf,
-            lpf=lpf,
-            preserve_edges=preserve_edges,
-        )
+        ai_variant = out
 
     gray_before = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY).astype(np.float32)
     gray_after = cv2.cvtColor(out, cv2.COLOR_BGR2GRAY).astype(np.float32)
