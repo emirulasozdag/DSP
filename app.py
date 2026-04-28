@@ -32,7 +32,7 @@ ALLOWED_MIME_TYPES = {"image/jpeg", "image/png", "image/jpg"}
 
 # Approximate mapping from MediaPipe FaceMesh indices to a dlib-style 68 landmark set.
 MEDIAPIPE_TO_68 = [
-    10, 338, 297, 332, 284, 251, 389, 356, 454, 323, 361, 288, 397, 365, 379, 378, 400,
+    234, 93, 132, 58, 172, 136, 150, 149, 176, 148, 152, 377, 400, 378, 379, 365, 397,
     70, 63, 105, 66, 107,
     336, 296, 334, 293, 300,
     168, 6, 197, 195,

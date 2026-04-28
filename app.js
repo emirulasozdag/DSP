@@ -128,7 +128,190 @@ function sampleLandmarks(points, targetCount = 68) {
   return sampled;
 }
 
-function applyLandmarksToSvg(points) {
+function isPointInPolygon(x, y, polygon) {
+  if (!Array.isArray(polygon) || polygon.length < 3) return false;
+  let inside = false;
+  for (let i = 0, j = polygon.length - 1; i < polygon.length; j = i, i += 1) {
+    const xi = polygon[i].x;
+    const yi = polygon[i].y;
+    const xj = polygon[j].x;
+    const yj = polygon[j].y;
+    const intersects = ((yi > y) !== (yj > y))
+      && (x < ((xj - xi) * (y - yi)) / ((yj - yi) || 1e-12) + xi);
+    if (intersects) inside = !inside;
+  }
+  return inside;
+}
+
+function convexHull(points) {
+  if (!Array.isArray(points) || points.length < 3) return points || [];
+  const pts = points
+    .map(p => ({ x: Number(p.x), y: Number(p.y) }))
+    .filter(p => Number.isFinite(p.x) && Number.isFinite(p.y))
+    .sort((a, b) => (a.x - b.x) || (a.y - b.y));
+
+  if (pts.length < 3) return pts;
+
+  const cross = (o, a, b) => ((a.x - o.x) * (b.y - o.y)) - ((a.y - o.y) * (b.x - o.x));
+  const lower = [];
+  for (const p of pts) {
+    while (lower.length >= 2 && cross(lower[lower.length - 2], lower[lower.length - 1], p) <= 0) {
+      lower.pop();
+    }
+    lower.push(p);
+  }
+
+  const upper = [];
+  for (let i = pts.length - 1; i >= 0; i -= 1) {
+    const p = pts[i];
+    while (upper.length >= 2 && cross(upper[upper.length - 2], upper[upper.length - 1], p) <= 0) {
+      upper.pop();
+    }
+    upper.push(p);
+  }
+
+  lower.pop();
+  upper.pop();
+  return lower.concat(upper);
+}
+
+function delaunayTriangles(nodes) {
+  if (!Array.isArray(nodes) || nodes.length < 3) return [];
+
+  const pts = nodes.map((p, i) => ({ x: Number(p.x), y: Number(p.y), idx: i }));
+  const xs = pts.map(p => p.x);
+  const ys = pts.map(p => p.y);
+  const minX = Math.min(...xs);
+  const minY = Math.min(...ys);
+  const maxX = Math.max(...xs);
+  const maxY = Math.max(...ys);
+  const dx = maxX - minX;
+  const dy = maxY - minY;
+  const dMax = Math.max(dx, dy) || 1;
+  const midX = (minX + maxX) / 2;
+  const midY = (minY + maxY) / 2;
+
+  const allPts = pts.concat([
+    { x: midX - 20 * dMax, y: midY - dMax, idx: -1 },
+    { x: midX, y: midY + 20 * dMax, idx: -1 },
+    { x: midX + 20 * dMax, y: midY - dMax, idx: -1 },
+  ]);
+
+  const s0 = allPts.length - 3;
+  const s1 = allPts.length - 2;
+  const s2 = allPts.length - 1;
+  let triangles = [{ a: s0, b: s1, c: s2 }];
+
+  const inCircumcircle = (p, a, b, c) => {
+    const d = 2 * (a.x * (b.y - c.y) + b.x * (c.y - a.y) + c.x * (a.y - b.y));
+    if (Math.abs(d) < 1e-9) return false;
+
+    const a2 = (a.x * a.x) + (a.y * a.y);
+    const b2 = (b.x * b.x) + (b.y * b.y);
+    const c2 = (c.x * c.x) + (c.y * c.y);
+
+    const ux = (a2 * (b.y - c.y) + b2 * (c.y - a.y) + c2 * (a.y - b.y)) / d;
+    const uy = (a2 * (c.x - b.x) + b2 * (a.x - c.x) + c2 * (b.x - a.x)) / d;
+
+    const r2 = ((ux - a.x) ** 2) + ((uy - a.y) ** 2);
+    const p2 = ((ux - p.x) ** 2) + ((uy - p.y) ** 2);
+    return p2 <= (r2 + 1e-6);
+  };
+
+  for (let pIdx = 0; pIdx < pts.length; pIdx += 1) {
+    const p = allPts[pIdx];
+    const bad = [];
+
+    triangles.forEach((t, i) => {
+      if (inCircumcircle(p, allPts[t.a], allPts[t.b], allPts[t.c])) bad.push(i);
+    });
+
+    const edgeCount = new Map();
+    const addEdge = (u, v) => {
+      const a = Math.min(u, v);
+      const b = Math.max(u, v);
+      const key = `${a}:${b}`;
+      edgeCount.set(key, (edgeCount.get(key) || 0) + 1);
+    };
+
+    bad.forEach(i => {
+      const t = triangles[i];
+      addEdge(t.a, t.b);
+      addEdge(t.b, t.c);
+      addEdge(t.c, t.a);
+    });
+
+    triangles = triangles.filter((_, i) => !bad.includes(i));
+
+    edgeCount.forEach((count, key) => {
+      if (count !== 1) return;
+      const [a, b] = key.split(':').map(Number);
+      triangles.push({ a, b, c: pIdx });
+    });
+  }
+
+  const hull = convexHull(pts);
+  const maxEdge = dMax * 0.35;
+
+  const distance = (u, v) => {
+    const dxv = u.x - v.x;
+    const dyv = u.y - v.y;
+    return Math.hypot(dxv, dyv);
+  };
+
+  return triangles
+    .filter(t => t.a < pts.length && t.b < pts.length && t.c < pts.length)
+    .map(t => ({ a: pts[t.a], b: pts[t.b], c: pts[t.c] }))
+    .filter(t => {
+      const e1 = distance(t.a, t.b);
+      const e2 = distance(t.b, t.c);
+      const e3 = distance(t.c, t.a);
+      if (e1 > maxEdge || e2 > maxEdge || e3 > maxEdge) return false;
+      if (hull.length < 3) return true;
+      const cx = (t.a.x + t.b.x + t.c.x) / 3;
+      const cy = (t.a.y + t.b.y + t.c.y) / 3;
+      return isPointInPolygon(cx, cy, hull);
+    });
+}
+
+function renderLandmarkMesh(nodes) {
+  const meshG = $('#meshG');
+  if (!meshG) return;
+
+  meshG.innerHTML = '';
+  if (!Array.isArray(nodes) || nodes.length < 3) return;
+
+  const triangles = delaunayTriangles(nodes);
+  triangles.forEach(tri => {
+    const poly = document.createElementNS('http://www.w3.org/2000/svg', 'polygon');
+    poly.setAttribute('points', `${tri.a.x.toFixed(1)},${tri.a.y.toFixed(1)} ${tri.b.x.toFixed(1)},${tri.b.y.toFixed(1)} ${tri.c.x.toFixed(1)},${tri.c.y.toFixed(1)}`);
+    poly.setAttribute('fill', 'none');
+    poly.setAttribute('stroke', 'rgba(139,92,246,0.32)');
+    poly.setAttribute('stroke-width', '.7');
+    meshG.appendChild(poly);
+  });
+
+  const showMesh = Boolean($('#tgMesh')?.checked);
+  meshG.style.opacity = showMesh ? '1' : '0';
+}
+
+function updateLandmarkLabels(mx, my) {
+  const labelNodes = Array.from($$('#labelsG text[data-idx]'));
+  labelNodes.forEach(label => {
+    const idx = Number(label.getAttribute('data-idx'));
+    const x = mx[idx];
+    const y = my[idx];
+    if (!Number.isFinite(x) || !Number.isFinite(y)) {
+      label.style.display = 'none';
+      return;
+    }
+    label.style.display = '';
+    label.setAttribute('x', x.toFixed(1));
+    label.setAttribute('y', (y - 7).toFixed(1));
+  });
+}
+
+function applyLandmarksToSvg(points68, meshPoints = points68) {
   const svg = $('#lmSvg');
   const circles = Array.from($$('#ptsG circle'));
   if (!svg || circles.length === 0) return;
@@ -145,7 +328,7 @@ function applyLandmarksToSvg(points) {
   svg.setAttribute('height', String(displayedImageHeight));
   svg.setAttribute('viewBox', `0 0 ${displayedImageWidth} ${displayedImageHeight}`);
 
-  const sampled = sampleLandmarks(points, circles.length);
+  const sampled = sampleLandmarks(points68, circles.length);
   backendState.landmarks = sampled;
 
   // Compute screen-space mapped coordinates from image-space landmarks.
@@ -164,6 +347,21 @@ function applyLandmarksToSvg(points) {
     c.setAttribute('cx', mx[i].toFixed(2));
     c.setAttribute('cy', my[i].toFixed(2));
   });
+
+  updateLandmarkLabels(mx, my);
+
+  const meshNodes = [];
+  (Array.isArray(meshPoints) ? meshPoints : []).forEach(p => {
+    const ix = Number(p.x);
+    const iy = Number(p.y);
+    const imageWidth = Number(p.imageWidth || displayedImageWidth);
+    const imageHeight = Number(p.imageHeight || displayedImageHeight);
+    if (!Number.isFinite(ix) || !Number.isFinite(iy)) return;
+    const x = (ix / imageWidth) * displayedImageWidth;
+    const y = (iy / imageHeight) * displayedImageHeight;
+    meshNodes.push({ x, y });
+  });
+  renderLandmarkMesh(meshNodes);
 
   // Helper: build SVG point-list string from landmark indices
   const pt  = i => (mx[i] !== undefined) ? `${mx[i].toFixed(1)},${my[i].toFixed(1)}` : null;
@@ -243,17 +441,33 @@ async function fetchLandmarksFromBackend(force = false) {
     if (!blob) return;
     const fd = new FormData();
     fd.append('image', blob, appState.fileName || 'input.jpg');
+    fd.append('includeReduced68', 'true');
+    fd.append('landmarkMode', 'both');
     const res = await fetch('/api/landmarks', { method: 'POST', body: fd });
     const data = await res.json();
     if (!res.ok || !data.ok) throw new Error(data.error || 'Landmark detection failed.');
 
-    const points = (data.landmarks || []).map(p => ({
+    const points68Source = (Array.isArray(data.reduced68) && data.reduced68.length)
+      ? data.reduced68
+      : data.landmarks;
+    const meshPointsSource = (Array.isArray(data.rawLandmarks) && data.rawLandmarks.length)
+      ? data.rawLandmarks
+      : points68Source;
+
+    const points68 = (points68Source || []).map(p => ({
       x: p.x,
       y: p.y,
       imageWidth: data.width,
       imageHeight: data.height,
     }));
-    applyLandmarksToSvg(points);
+    const meshPoints = (meshPointsSource || []).map(p => ({
+      x: p.x,
+      y: p.y,
+      imageWidth: data.width,
+      imageHeight: data.height,
+    }));
+
+    applyLandmarksToSvg(points68, meshPoints);
     backendState.landmarksLoaded = true;
     backendState.lastLmData = data;  // cache for re-entry
 
