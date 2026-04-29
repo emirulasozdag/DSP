@@ -450,10 +450,14 @@ def _fill_feature_masks_from_landmarks(mask: np.ndarray, points) -> bool:
             return
         arr = np.array(pts, dtype=np.int32)
         hull = cv2.convexHull(arr)
-        cv2.fillConvexPoly(mask, hull, 255, lineType=cv2.LINE_AA)
+        # Draw the new region on a temp mask so dilation only affects the new
+        # polygon, not the already-accumulated mask from previous add_poly calls.
+        temp = np.zeros_like(mask)
+        cv2.fillConvexPoly(temp, hull, 255, lineType=cv2.LINE_AA)
         if expand > 0:
             kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (_odd_kernel(expand), _odd_kernel(expand)))
-            mask[:] = cv2.dilate(mask, kernel, iterations=1)
+            temp = cv2.dilate(temp, kernel, iterations=1)
+        mask[:] = cv2.bitwise_or(mask, temp)
 
     add_poly([33, 7, 163, 144, 145, 153, 154, 155, 133, 246, 161, 160, 159, 158, 157, 173], 5)
     add_poly([362, 382, 381, 380, 374, 373, 390, 249, 263, 466, 388, 387, 386, 385, 384, 398], 5)
@@ -1248,7 +1252,190 @@ def _extract_landmarks_for_warp(image: np.ndarray):
     return pts, _MP68_GROUPS
 
 
-# ── Distance-based Gaussian falloff ─────────────────────────────────────────
+# ── Muscle-based dense flow-field engine (v3) ────────────────────────────────
+
+def _group_centroid(src_pts: np.ndarray, groups: dict, *keys) -> np.ndarray | None:
+    """Return the mean position of all landmarks belonging to the given group keys."""
+    idxs: list = []
+    for k in keys:
+        idxs.extend(groups.get(k, []))
+    valid = [src_pts[i] for i in idxs if 0 <= i < len(src_pts)]
+    if not valid:
+        return None
+    return np.mean(valid, axis=0).astype(np.float32)
+
+
+def _muscle_add_force(
+    flow: np.ndarray,
+    cx: float, cy: float,
+    rx: float, ry: float,
+    angle_deg: float,
+    fdx: float, fdy: float,
+    strength: float,
+) -> None:
+    """
+    Accumulate an anisotropic Gaussian force into the inverse flow field.
+
+    flow[y, x, 0/1] is the *inverse* displacement: output pixel (x, y) samples
+    source at (x + flow_x, y + flow_y).  A forward push (fdx, fdy) is stored as
+    its negative so that cv2.remap moves tissue in the correct direction.
+    """
+    h, w = flow.shape[:2]
+    yy, xx = np.ogrid[:h, :w]
+    dx_g = xx.astype(np.float32) - cx
+    dy_g = yy.astype(np.float32) - cy
+    rad = float(np.deg2rad(angle_deg))
+    cos_a, sin_a = float(np.cos(rad)), float(np.sin(rad))
+    lx =  dx_g * cos_a + dy_g * sin_a
+    ly = -dx_g * sin_a + dy_g * cos_a
+    weight = np.exp(-(lx ** 2 / (rx ** 2 + 1e-6) + ly ** 2 / (ry ** 2 + 1e-6))) * strength
+    flow[:, :, 0] -= weight * fdx
+    flow[:, :, 1] -= weight * fdy
+
+
+def _build_muscle_flow(
+    h: int,
+    w: int,
+    src_pts: np.ndarray,
+    groups: dict,
+    smile: float,
+    brow: float,
+    lip: float,
+    slim: float,
+) -> np.ndarray:
+    """
+    Isolated per-slider displacement field [h, w, 2].
+
+    Design rules:
+    - Each slider ONLY displaces its own landmark group.  Zero coupling between
+      regions (no cheek lift from smile, no eyelid from brow, etc.).
+    - Forces use tight Gaussian radii (≤5% face width) so neighbouring regions
+      are not affected — effectively direct landmark displacement.
+    - Sign convention: flow -= weight * fdx/fdy  (inverse warp for cv2.remap).
+      Forward push → store as negative fdx/fdy so the pixel samples the correct
+      source location.
+    """
+    flow = np.zeros((h, w, 2), dtype=np.float32)
+    face_w = max(float(np.max(src_pts[:, 0]) - np.min(src_pts[:, 0])), 1.0)
+    face_h = max(float(np.max(src_pts[:, 1]) - np.min(src_pts[:, 1])), 1.0)
+    _cx = _group_centroid(src_pts, groups, "center")
+    cx_pt = _cx if _cx is not None else src_pts.mean(axis=0)
+
+    def ctr(*keys):
+        return _group_centroid(src_pts, groups, *keys)
+
+    def force(pt, rx, ry, fdx, fdy, s=1.0, angle=0.0):
+        if pt is None:
+            return
+        _muscle_add_force(flow, float(pt[0]), float(pt[1]),
+                          float(rx), float(ry), float(angle),
+                          float(fdx), float(fdy), float(s))
+
+    def curve(v: float) -> float:
+        """Power-1.5 curve — used only for sliders that need it (slim)."""
+        return float(np.sign(v) * abs(v) ** 1.5)
+
+    # Moderate local radii — visible effect while keeping each slider
+    # confined to its own anatomical region.
+    # ~8-10% face_w ≈ 20-30 px on a typical crop (enough to see, too small to bleed).
+    R_C  = face_w * 0.085   # corner radius (mouth corners, brow)
+    R_L  = face_w * 0.095   # lip body centroid (slightly wider)
+    R_CV = face_h * 0.075   # vertical complement for corners
+    R_LV = face_h * 0.065   # vertical complement for lip body
+
+    # ── SMILE ──────────────────────────────────────────────────────────────
+    # Moves ONLY mouth corners (outward + upward) + lips (vertical only).
+    # No cheeks, no eyes, no nose, no jaw — zero cross-region coupling.
+    #   corner dx = ±0.030 × face_w × smile
+    #   corner dy = -0.040 × face_h × smile  (negative = upward in image coords)
+    #   lip    dy = ±0.010 × face_h × smile
+    if abs(smile) > 0.01:
+        mc_l = ctr("mouth_left")
+        mc_r = ctr("mouth_right")
+        ul   = ctr("upper_lip")
+        ll   = ctr("lower_lip")
+
+        cdx = 0.030 * face_w * smile
+        cdy = 0.040 * face_h * smile
+        ldy = min(abs(smile), 1.0) * 0.010 * face_h
+
+        # flow -= weight * fdy; for tissue to rise, flow_y > 0, so fdy < 0.
+        force(mc_l, R_C, R_CV, -cdx, -cdy, 1.0)   # left corner:  left  + up
+        force(mc_r, R_C, R_CV,  cdx, -cdy, 1.0)   # right corner: right + up
+        force(ul,   R_L, R_LV,  0.0, -ldy, 0.60)  # upper lip:    up only
+        force(ll,   R_L, R_LV,  0.0,  ldy, 0.60)  # lower lip:    down only
+
+    # ── BROW RAISE ─────────────────────────────────────────────────────────
+    # Moves ONLY the brow landmark centroids — no forehead, no eyelid.
+    if abs(brow) > 0.01:
+        bl   = ctr("brow_left")
+        br_r = ctr("brow_right")
+        bdy  = 0.045 * face_h * brow
+        force(bl,   R_C, R_CV, 0.0, -bdy, 1.0)
+        force(br_r, R_C, R_CV, 0.0, -bdy, 1.0)
+
+    # ── LIP WIDENING ───────────────────────────────────────────────────────
+    # Mouth corners horizontal only — no vertical, no cheek/nose side effects.
+    if abs(lip) > 0.01:
+        mc_l = ctr("mouth_left")
+        mc_r = ctr("mouth_right")
+        ldx  = 0.032 * face_w * lip
+        force(mc_l, R_C, R_CV, -ldx, 0.0, 1.0)
+        force(mc_r, R_C, R_CV,  ldx, 0.0, 1.0)
+
+    # ── FACE SLIMMING (masseter + jaw geometry) ────────────────────────────
+    # Jaw requires a wider radius than the other sliders because the masseter
+    # covers a larger anatomical area.  Force is centered 28% inward from the
+    # jaw border to prevent background contamination at the skin edge.
+    if abs(slim) > 0.01:
+        sl      = curve(slim)
+        jaw_l   = ctr("jaw_left")
+        jaw_r   = ctr("jaw_right")
+        chin    = ctr("chin")
+        face_cx = float(cx_pt[0])
+        face_cy = float(cx_pt[1])
+        if jaw_l is not None:
+            inward = float(np.clip((face_cx - jaw_l[0]) * 0.20 * sl, -face_w * 0.10, face_w * 0.10))
+            jaw_l_inner = jaw_l + (np.array([face_cx, face_cy], np.float32) - jaw_l) * 0.28
+            force(jaw_l_inner, face_w * 0.13, face_h * 0.22, inward, 0.0, 1.0)
+        if jaw_r is not None:
+            inward = float(np.clip((face_cx - jaw_r[0]) * 0.20 * sl, -face_w * 0.10, face_w * 0.10))
+            jaw_r_inner = jaw_r + (np.array([face_cx, face_cy], np.float32) - jaw_r) * 0.28
+            force(jaw_r_inner, face_w * 0.13, face_h * 0.22, inward, 0.0, 1.0)
+        force(chin, face_w * 0.20, face_h * 0.09, 0.0, -sl * face_h * 0.011, 0.70)
+
+    return flow
+
+
+def _lock_identity_regions(
+    flow: np.ndarray, src_pts: np.ndarray, groups: dict,
+) -> np.ndarray:
+    """
+    Suppress flow near identity-critical anchors (nose tip, eye centres) so
+    they remain perfectly stable regardless of expression slider values.
+    """
+    h, w = flow.shape[:2]
+    face_w = max(float(np.max(src_pts[:, 0]) - np.min(src_pts[:, 0])), 1.0)
+    yy, xx = np.ogrid[:h, :w]
+    lock_mask = np.zeros((h, w), dtype=np.float32)
+    lock_specs = [
+        (_group_centroid(src_pts, groups, "nose_tip", "center"), face_w * 0.065),
+        (_group_centroid(src_pts, groups, "lower_eye_left"),     face_w * 0.046),
+        (_group_centroid(src_pts, groups, "lower_eye_right"),    face_w * 0.046),
+    ]
+    for pt, radius in lock_specs:
+        if pt is None:
+            continue
+        d2 = (xx.astype(np.float32) - float(pt[0])) ** 2 + \
+             (yy.astype(np.float32) - float(pt[1])) ** 2
+        lock_mask = np.maximum(lock_mask, np.exp(-d2 / (radius ** 2 + 1e-6)))
+    lock_mask = np.clip(lock_mask, 0.0, 1.0)
+    flow[:, :, 0] *= 1.0 - lock_mask
+    flow[:, :, 1] *= 1.0 - lock_mask
+    return flow
+
+
+# ── Legacy point-displacement helpers (kept for backward compatibility) ────────
 
 def _falloff_weights(src_points: np.ndarray, anchor_idxs: list, sigma: float) -> np.ndarray:
     """Per-point Gaussian weight: distance from nearest anchor point."""
@@ -1594,171 +1781,7 @@ def _tps_remap(image: np.ndarray, src_ctrl: np.ndarray, dst_ctrl: np.ndarray,
                      borderMode=cv2.BORDER_REFLECT_101)
 
 
-# ── Per-expression soft region masks ────────────────────────────────────────
-
-def _build_expression_mask(
-    h: int,
-    w: int,
-    src_pts: np.ndarray,
-    groups: dict,
-    expression: str,
-    face_w: float,
-    face_h: float,
-) -> np.ndarray:
-    """
-    Return a float32 [0,1] mask that covers only the region affected by
-    the given expression ('smile' | 'brow' | 'lip' | 'slim').
-    """
-    mask = np.zeros((h, w), dtype=np.float32)
-
-    def pts_of(*keys) -> list:
-        idxs: list = []
-        for k in keys:
-            idxs.extend(groups.get(k, []))
-        return [src_pts[i] for i in idxs if 0 <= i < len(src_pts)]
-
-    def draw_ell(cx: float, cy: float, rx: float, ry: float) -> None:
-        cv2.ellipse(
-            mask,
-            (int(round(cx)), int(round(cy))),
-            (max(1, int(round(rx))), max(1, int(round(ry)))),
-            0, 0, 360, 1.0, -1,
-        )
-
-    if expression == "smile":
-        pts = pts_of("mouth_left", "mouth_right", "upper_lip", "lower_lip",
-                     "cheek_left", "cheek_right", "lower_eye_left", "lower_eye_right",
-                     "inner_upper", "inner_lower")
-        if pts:
-            xs = [p[0] for p in pts]
-            ys = [p[1] for p in pts]
-            cx, cy = float(np.mean(xs)), float(np.mean(ys))
-            draw_ell(cx, cy,
-                     (max(xs) - min(xs)) * 0.65 + face_w * 0.10,
-                     (max(ys) - min(ys)) * 0.55 + face_h * 0.12)
-
-    elif expression == "brow":
-        for side_keys in (
-            ("brow_left",  "forehead_left",  "upper_eyelid_left"),
-            ("brow_right", "forehead_right", "upper_eyelid_right"),
-        ):
-            side = pts_of(*side_keys)
-            if side:
-                xs = [p[0] for p in side]
-                ys = [p[1] for p in side]
-                cx = float(np.mean(xs))
-                cy = float(np.mean(ys)) - face_h * 0.03
-                draw_ell(cx, cy, face_w * 0.22, face_h * 0.15)
-
-    elif expression == "lip":
-        pts = pts_of("mouth_left", "mouth_right", "upper_lip", "lower_lip",
-                     "inner_upper", "inner_lower")
-        if pts:
-            xs = [p[0] for p in pts]
-            ys = [p[1] for p in pts]
-            cx, cy = float(np.mean(xs)), float(np.mean(ys))
-            draw_ell(cx, cy,
-                     (max(xs) - min(xs)) * 0.65 + face_w * 0.06,
-                     (max(ys) - min(ys)) * 0.55 + face_h * 0.06)
-
-    elif expression == "slim":
-        for side_keys in (("jaw_left",), ("jaw_right",)):
-            side = pts_of(*side_keys)
-            if side:
-                xs = [p[0] for p in side]
-                ys = [p[1] for p in side]
-                cx, cy = float(np.mean(xs)), float(np.mean(ys))
-                draw_ell(cx, cy,
-                         face_w * 0.18,
-                         (max(ys) - min(ys)) * 0.60 + face_h * 0.08)
-
-    ksize = max(3, int(face_h * 0.08)) | 1
-    sigma = face_h * 0.04
-    mask = cv2.GaussianBlur(mask, (ksize, ksize), sigma)
-    return np.clip(mask, 0.0, 1.0)
-
-
-# ── Debug image generation ───────────────────────────────────────────────────
-
-def _save_debug_images(
-    image: np.ndarray,
-    src_pts: np.ndarray,
-    dst_pts: np.ndarray,
-    triangles: list,
-    all_src: np.ndarray,
-    expression_mask: np.ndarray,
-    warped: np.ndarray,
-) -> dict:
-    """Save debug visualisations to RESULTS_DIR and return their paths."""
-    paths: dict = {}
-
-    def _s(img: np.ndarray, name: str) -> str:
-        p = _save_image(img, name)
-        paths[name] = p
-        return p
-
-    # 1. Source landmarks (green dots)
-    vis_src = image.copy()
-    for pt in src_pts:
-        cv2.circle(vis_src, (int(pt[0]), int(pt[1])), 2, (0, 255, 0), -1)
-    _s(vis_src, "debug_src_landmarks")
-
-    # 2. Target landmarks (red dots) + displacement arrows
-    vis_dst = image.copy()
-    for i in range(min(len(src_pts), len(dst_pts))):
-        p_s = (int(src_pts[i][0]), int(src_pts[i][1]))
-        p_d = (int(dst_pts[i][0]), int(dst_pts[i][1]))
-        cv2.circle(vis_dst, p_d, 2, (0, 0, 255), -1)
-        if p_s != p_d:
-            cv2.arrowedLine(vis_dst, p_s, p_d, (255, 80, 80), 1, cv2.LINE_AA, tipLength=0.4)
-    _s(vis_dst, "debug_dst_landmarks")
-
-    # 3. Delaunay mesh overlay (cyan lines)
-    vis_tri = image.copy()
-    n = len(all_src)
-    for i1, i2, i3 in triangles:
-        if i1 < n and i2 < n and i3 < n:
-            p1 = (int(all_src[i1][0]), int(all_src[i1][1]))
-            p2 = (int(all_src[i2][0]), int(all_src[i2][1]))
-            p3 = (int(all_src[i3][0]), int(all_src[i3][1]))
-            cv2.line(vis_tri, p1, p2, (255, 200, 0), 1, cv2.LINE_AA)
-            cv2.line(vis_tri, p2, p3, (255, 200, 0), 1, cv2.LINE_AA)
-            cv2.line(vis_tri, p3, p1, (255, 200, 0), 1, cv2.LINE_AA)
-    _s(vis_tri, "debug_delaunay_mesh")
-
-    # 4. Displacement vectors only (arrows on original)
-    vis_disp = image.copy()
-    step = max(1, len(src_pts) // 80)
-    for i in range(0, min(len(src_pts), len(dst_pts)), step):
-        p_s = (int(src_pts[i][0]), int(src_pts[i][1]))
-        p_d = (int(dst_pts[i][0]), int(dst_pts[i][1]))
-        if p_s != p_d:
-            cv2.arrowedLine(vis_disp, p_s, p_d, (0, 200, 255), 1,
-                            cv2.LINE_AA, tipLength=0.35)
-    _s(vis_disp, "debug_displacement_vectors")
-
-    # 5. Expression mask preview (JET colormap)
-    mask_u8 = (np.clip(expression_mask, 0.0, 1.0) * 255).astype(np.uint8)
-    mask_jet = cv2.applyColorMap(mask_u8, cv2.COLORMAP_JET)
-    # Blend mask over original for spatial reference
-    mask_overlay = cv2.addWeighted(image, 0.55, mask_jet, 0.45, 0)
-    _s(mask_overlay, "debug_expression_mask")
-
-    # 6. Warped result with mask boundary drawn (contour ring)
-    mask_u8_t = (np.clip(expression_mask, 0.0, 1.0) * 255).astype(np.uint8)
-    _, mask_bin = cv2.threshold(mask_u8_t, 30, 255, cv2.THRESH_BINARY)
-    contours, _ = cv2.findContours(mask_bin, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-    vis_warped = warped.copy()
-    cv2.drawContours(vis_warped, contours, -1, (0, 255, 128), 1, cv2.LINE_AA)
-    _s(vis_warped, "debug_warped_mask_contour")
-
-    # 7. Side-by-side before / after
-    _s(np.hstack([image, warped]), "debug_before_after")
-
-    return paths
-
-
-# ── Main expression warp orchestrator ────────────────────────────────────────
+# ── Main expression warp orchestrator (v3) ────────────────────────────────────
 
 def _apply_expression_warp(
     image: np.ndarray,
@@ -1766,97 +1789,80 @@ def _apply_expression_warp(
     brow: float,
     lip: float,
     slim: float,
-    warp_mode: str = "delaunay",
+    warp_mode: str = "flow",   # parameter kept for API compatibility
     save_debug: bool = False,
 ) -> tuple:
     """
-    Warp image to simulate facial expressions.
-    Returns (result_image, debug_paths_dict).
-    warp_mode: 'delaunay' | 'tps'
+    Muscle-based dense flow-field expression warping.
+
+    Pipeline:
+      1. Build per-pixel inverse displacement field from anatomical muscle forces.
+      2. Lock identity-critical regions (nose tip, eye centres).
+      3. Smooth with a wide Gaussian — eliminates all spatial discontinuities.
+      4. Clamp extreme displacements.
+      5. Apply via cv2.remap — no triangle seams, no alpha blending.
     """
     h, w = image.shape[:2]
-    src_pts, groups = _extract_landmarks_for_warp(image)
-    dst_pts = _build_dst_landmarks_v2(src_pts, groups, smile, brow, lip, slim, w, h)
 
-    face_w = float(np.max(src_pts[:, 0]) - np.min(src_pts[:, 0]))
-    face_h = float(np.max(src_pts[:, 1]) - np.min(src_pts[:, 1]))
-
-    # Build composite soft expression mask
-    combined_mask = np.zeros((h, w), dtype=np.float32)
-    for expr, strength in (("smile", smile), ("brow", brow), ("lip", lip), ("slim", slim)):
-        if abs(strength) > 1e-4:
-            m = _build_expression_mask(h, w, src_pts, groups, expr, face_w, face_h)
-            combined_mask = np.maximum(combined_mask, m * float(np.clip(abs(strength) * 1.5, 0.0, 1.0)))
-
-    # Slider at 0 → return original immediately
-    if combined_mask.max() < 0.01:
+    if smile == 0.0 and brow == 0.0 and lip == 0.0 and slim == 0.0:
         return image.copy(), {}
 
-    combined_mask = np.clip(combined_mask, 0.0, 1.0)
+    src_pts, groups = _extract_landmarks_for_warp(image)
 
-    # ── Constrain mask to face interior hull ──────────────────────────────
-    # This prevents blending at the face-background boundary which causes
-    # visible ghosting / blurring on the cheek edges.
-    hull_pts = cv2.convexHull(src_pts.astype(np.int32))
-    hull_mask = np.zeros((h, w), dtype=np.float32)
-    cv2.fillConvexPoly(hull_mask, hull_pts, 1.0)
-    # Erode inward so blending never reaches the skin-background edge
-    erode_r = max(3, int(min(face_w, face_h) * 0.035))
-    erode_k = _odd_kernel(erode_r * 2 + 1)
-    hull_eroded = cv2.erode(hull_mask, cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (erode_k, erode_k)))
-    # Soft falloff inside the hull boundary
-    hull_soft = cv2.GaussianBlur(hull_eroded, (_odd_kernel(erode_r * 2 + 3), _odd_kernel(erode_r * 2 + 3)), erode_r * 0.5)
-    combined_mask = combined_mask * np.clip(hull_soft, 0.0, 1.0)
+    # 1. Muscle-driven dense flow field
+    flow = _build_muscle_flow(h, w, src_pts, groups, smile, brow, lip, slim)
 
-    # ── Warp ──────────────────────────────────────────────────────────────
-    if warp_mode == "tps":
-        warped_full = _tps_remap(image, src_pts, dst_pts, subsample=4)
-        triangles_for_debug: list = []
-        all_src_for_debug = src_pts
-    else:
-        # Delaunay triangulation (default)
-        src_all = _add_boundary_points(src_pts, w, h)
-        dst_all = _add_boundary_points(dst_pts, w, h)
-        triangles = _triangle_indices_from_subdiv(src_all, w, h)
-        src_f = image.astype(np.float32)
-        warped_f = image.astype(np.float32).copy()
-        for i1, i2, i3 in triangles:
-            t_src = np.float32([src_all[i1], src_all[i2], src_all[i3]])
-            t_dst = np.float32([dst_all[i1], dst_all[i2], dst_all[i3]])
-            _warp_triangle(src_f, warped_f, t_src, t_dst, interp=cv2.INTER_CUBIC)
-        warped_full = np.clip(warped_f, 0, 255).astype(np.uint8)
-        triangles_for_debug = triangles
-        all_src_for_debug = src_all
+    # 2. Identity preservation
+    flow = _lock_identity_regions(flow, src_pts, groups)
 
-    # ── Alpha blend: warped only in expression region ─────────────────────
-    mask3d = combined_mask[:, :, None]
-    blended = (
-        image.astype(np.float32) * (1.0 - mask3d)
-        + warped_full.astype(np.float32) * mask3d
+    # 2.5 Hull masking — zero the flow outside the face convex hull so that
+    # background pixels keep zero displacement (no background colour bleed).
+    hull_pts_warp = cv2.convexHull(src_pts.astype(np.int32))
+    hull_f = np.zeros((h, w), dtype=np.float32)
+    cv2.fillConvexPoly(hull_f, hull_pts_warp, 1.0)
+    kh = max(21, int(min(h, w) * 0.07)) | 1
+    hull_f = cv2.GaussianBlur(hull_f, (kh, kh), kh * 0.35)
+    flow[:, :, 0] *= hull_f
+    flow[:, :, 1] *= hull_f
+
+    # 3. Localised Gaussian smoothing — smooths the sharp Gaussian edges at
+    #    landmark boundaries without spreading into adjacent regions.
+    #    ~5% of image size keeps effects visible but still locally confined.
+    ksize = max(17, int(min(h, w) * 0.05)) | 1
+    sigma = float(ksize) * 0.42
+    flow[:, :, 0] = cv2.GaussianBlur(flow[:, :, 0], (ksize, ksize), sigma)
+    flow[:, :, 1] = cv2.GaussianBlur(flow[:, :, 1], (ksize, ksize), sigma)
+
+    # 4. Anti-artifact displacement clamp
+    mag = np.hypot(flow[:, :, 0], flow[:, :, 1])
+    max_disp = min(h, w) * 0.13
+    over = mag > max_disp
+    if over.any():
+        scale = np.where(over, max_disp / (mag + 1e-8), 1.0)
+        flow[:, :, 0] *= scale
+        flow[:, :, 1] *= scale
+
+    # 5. Inverse remap: dst(x, y) ← src(x + flow_x, y + flow_y)
+    yy, xx = np.mgrid[:h, :w].astype(np.float32)
+    map_x = np.clip(xx + flow[:, :, 0], 0.0, w - 1.0)
+    map_y = np.clip(yy + flow[:, :, 1], 0.0, h - 1.0)
+    result = cv2.remap(
+        image, map_x, map_y,
+        interpolation=cv2.INTER_CUBIC,
+        borderMode=cv2.BORDER_REFLECT_101,
     )
-    result = np.clip(blended, 0, 255).astype(np.uint8)
 
-    # Seam-only bilateral smoothing: apply only in the soft-feather transition band
-    # (0.05 < mask < 0.95) to reduce any residual triangle boundary artifacts
-    # without degrading the untouched skin regions.
-    seam_zone = ((combined_mask > 0.05) & (combined_mask < 0.95)).astype(np.float32)
-    if seam_zone.max() > 0:
-        ksize = max(3, int(min(h, w) * 0.008)) | 1  # ensure odd
-        seam_blur = cv2.GaussianBlur(seam_zone, (ksize, ksize), 0)
-        bilateral = cv2.bilateralFilter(result, d=5, sigmaColor=20, sigmaSpace=6)
-        seam3 = seam_blur[:, :, None]
-        result = np.clip(
-            result.astype(np.float32) * (1.0 - seam3) + bilateral.astype(np.float32) * seam3,
-            0, 255,
-        ).astype(np.uint8)
-
-    # ── Debug images ──────────────────────────────────────────────────────
     debug_paths: dict = {}
     if save_debug:
-        debug_paths = _save_debug_images(
-            image, src_pts, dst_pts,
-            triangles_for_debug, all_src_for_debug,
-            combined_mask, result,
+        mag_u8  = cv2.normalize(mag, None, 0, 255, cv2.NORM_MINMAX).astype(np.uint8)
+        mag_vis = cv2.applyColorMap(mag_u8, cv2.COLORMAP_JET)
+        debug_paths["flow_magnitude"] = _save_image(mag_vis, "debug_flow_magnitude")
+        vis_lm = image.copy()
+        for pt in src_pts:
+            cv2.circle(vis_lm, (int(pt[0]), int(pt[1])), 2, (0, 255, 0), -1)
+        debug_paths["landmarks"] = _save_image(vis_lm, "debug_landmarks")
+        debug_paths["before_after"] = _save_image(
+            np.hstack([image, result]), "debug_before_after"
         )
 
     return result, debug_paths
@@ -2018,10 +2024,12 @@ def api_landmarks():
             "confidence": round(confidence, 1),
             "method": used_method,
             "landmarks": points,
-            "rawLandmarks": raw_mediapipe if response_mode == "both" else None,
-            "reduced68": (
-                _reduce_mediapipe_to_68(raw_mediapipe) if (used_method == "mediapipe" and (include_reduced68 or response_mode == "both")) else None
-            ),
+            **({
+                "rawLandmarks": raw_mediapipe,
+            } if response_mode == "both" else {}),
+            **({
+                "reduced68": _reduce_mediapipe_to_68(raw_mediapipe),
+            } if (used_method == "mediapipe" and (include_reduced68 or response_mode == "both")) else {}),
             "saved": saved,
             "durationMs": round(elapsed_ms, 2),
         }
@@ -2219,6 +2227,7 @@ def api_aging():
             "energyBefore": energy_before,
             "energyAfter": energy_after,
             "maskMethod": transform_meta.get("maskMethod"),
+            "skinHighFrequencyEnergy": transform_meta.get("skinHighFrequencyEnergy"),
             "variants": {
                 "frequency": _thumbnail_b64(freq_variant),
                 "ai": _thumbnail_b64(ai_variant),
@@ -2257,9 +2266,9 @@ def api_transform():
     lip   = _norm(lip)
     slim  = _norm(slim)
 
-    warp_mode = (request.form.get("mode", "delaunay") or "delaunay").strip().lower()
-    if warp_mode not in {"delaunay", "tps"}:
-        warp_mode = "delaunay"
+    warp_mode = (request.form.get("mode", "flow") or "flow").strip().lower()
+    if warp_mode not in {"delaunay", "tps", "flow"}:
+        warp_mode = "flow"
 
     save_debug = request.form.get("debug", "false").strip().lower() in {"1", "true", "yes"}
 
