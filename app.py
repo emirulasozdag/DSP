@@ -1794,6 +1794,20 @@ def _apply_expression_warp(
 
     combined_mask = np.clip(combined_mask, 0.0, 1.0)
 
+    # ── Constrain mask to face interior hull ──────────────────────────────
+    # This prevents blending at the face-background boundary which causes
+    # visible ghosting / blurring on the cheek edges.
+    hull_pts = cv2.convexHull(src_pts.astype(np.int32))
+    hull_mask = np.zeros((h, w), dtype=np.float32)
+    cv2.fillConvexPoly(hull_mask, hull_pts, 1.0)
+    # Erode inward so blending never reaches the skin-background edge
+    erode_r = max(3, int(min(face_w, face_h) * 0.035))
+    erode_k = _odd_kernel(erode_r * 2 + 1)
+    hull_eroded = cv2.erode(hull_mask, cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (erode_k, erode_k)))
+    # Soft falloff inside the hull boundary
+    hull_soft = cv2.GaussianBlur(hull_eroded, (_odd_kernel(erode_r * 2 + 3), _odd_kernel(erode_r * 2 + 3)), erode_r * 0.5)
+    combined_mask = combined_mask * np.clip(hull_soft, 0.0, 1.0)
+
     # ── Warp ──────────────────────────────────────────────────────────────
     if warp_mode == "tps":
         warped_full = _tps_remap(image, src_pts, dst_pts, subsample=4)
