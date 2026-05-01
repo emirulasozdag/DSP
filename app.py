@@ -1,17 +1,94 @@
+"""
+Facial Image Warping, Aging, and Expression Transformation — Backend API
+=========================================================================
+
+Architecture (layered DSP pipeline)
+-------------------------------------
+  Input Layer        : Image upload, MIME validation, byte-size guard, decode.
+  Preprocessing Layer: Face detection / crop, resize, normalisation, grayscale.
+  DSP Processing     : Three independent pipelines —
+      • Landmark Detection  — MediaPipe FaceMesh (468 pts) or Haar/skin fallback.
+      • Expression Warping  — Muscle-based dense flow field; Delaunay triangulation
+                              + per-triangle affine transforms; TPS spline warp.
+      • Aging / De-Aging    — 2-D FFT frequency processing:
+                                Aging   → high-pass filter (HPF) amplifies high-freq
+                                          components (skin texture, wrinkles).
+                                De-Aging → low-pass filter (LPF) smooths fine detail.
+  Output Layer       : JPEG encode, Base-64, file save, JSON response.
+  Evaluation Layer   : MSE, PSNR, SSIM, FFT energy spectrum comparison.
+
+Key DSP concepts used
+----------------------
+  - 2-D Discrete Fourier Transform (DFT / FFT) via numpy.fft.fft2
+  - Frequency-domain filtering: Gaussian, Butterworth (order-2), Ideal brick-wall
+  - Parseval's theorem for energy-preserving normalisation
+  - Delaunay triangulation (cv2.Subdiv2D) for mesh-based warping
+  - Per-triangle affine transform: 3-point correspondence → 2×3 matrix → warpAffine
+  - Thin Plate Spline (TPS) interpolation for smooth global deformation
+  - Dense inverse displacement (flow) field remapped with cv2.remap
+
+Performance target: ≤ 5 seconds end-to-end on standard hardware.
+All matrix operations use NumPy vectorised routines (no Python-level pixel loops).
+"""
+
 from __future__ import annotations
 
 import base64
 import hashlib
+import io
 import os
 import time
 import uuid
 import traceback
 from pathlib import Path
 
+from dotenv import load_dotenv
+
+# ---------------------------------------------------------------------------
+# Startup environment check — runs once when the server starts.
+# Uses __file__ so the path is always relative to app.py, not the CWD.
+# This prevents Flask's reloader child process from missing the .env file.
+# The actual key value is never printed for security reasons.
+# ---------------------------------------------------------------------------
+print("CWD:", os.getcwd())
+_env_path = Path(__file__).resolve().parent / ".env"  # always next to app.py
+print(".env exists:", _env_path.exists())
+load_dotenv(str(_env_path), override=True)  # override=True ensures reloader re-applies it
+_replicate_key_check = os.getenv("REPLICATE_API_TOKEN", "").strip()
+print("REPLICATE_API_TOKEN loaded:", bool(_replicate_key_check))
+if not _replicate_key_check:
+    print("WARNING: REPLICATE_API_TOKEN is not set or not loaded!")
+del _replicate_key_check  # don't leave the key value dangling in module scope
+# ---------------------------------------------------------------------------
+
+try:
+    import requests as _requests  # used as fallback / helper
+except ImportError:  # pragma: no cover
+    _requests = None
+
+try:
+    import replicate as _replicate
+except ImportError:  # pragma: no cover
+    _replicate = None
+
+try:
+    from google import genai as _genai
+    from google.genai import types as _genai_types
+except ImportError:  # pragma: no cover
+    _genai = None
+    _genai_types = None
+
 import cv2
 import numpy as np
 from flask import Flask, jsonify, request, send_from_directory
 from skimage.metrics import structural_similarity
+
+try:
+    # aging.py — classical DSP aging module (Laplacian HPF + CLAHE + hair graying)
+    from aging import apply_aging_effect as _classical_aging_effect
+except Exception as _aging_import_err:  # pragma: no cover
+    _classical_aging_effect = None
+    print(f"aging.py import failed (classical method unavailable): {_aging_import_err}")
 
 try:
     import mediapipe as mp  # type: ignore
@@ -47,7 +124,7 @@ app = Flask(__name__)
 
 MAX_UPLOAD_BYTES = 10 * 1024 * 1024
 ALLOWED_MIME_TYPES = {"image/jpeg", "image/png", "image/jpg"}
-ALLOWED_AGING_METHODS = {"freq", "ai"}
+ALLOWED_AGING_METHODS = {"freq", "ai", "classical"}
 ALLOWED_HPF_FILTERS = {"gaussian_hpf", "butterworth_hpf", "ideal_hpf"}
 ALLOWED_LPF_FILTERS = {"gaussian_lpf", "butterworth_lpf", "ideal_lpf"}
 
@@ -257,6 +334,24 @@ def _read_image(file_storage):
     return image
 
 
+def _read_image_from_bytes(raw: bytes):
+    """Decode BGR image from raw bytes (already read from a file/stream)."""
+    if not raw:
+        raise ValueError("Image bytes are empty.")
+    if len(raw) > MAX_UPLOAD_BYTES:
+        raise ValueError("Image exceeds the 10 MB limit.")
+    arr = np.frombuffer(raw, dtype=np.uint8)
+    image = cv2.imdecode(arr, cv2.IMREAD_COLOR)
+    if image is None:
+        raise ValueError("Could not decode image.")
+    h, w = image.shape[:2]
+    if h < 64 or w < 64:
+        raise ValueError("Image resolution is too small. Minimum is 64x64.")
+    if h > 4096 or w > 4096:
+        raise ValueError("Image resolution is too large. Maximum is 4096x4096.")
+    return image
+
+
 def _save_image(image: np.ndarray, prefix: str) -> str:
     name = f"{prefix}-{uuid.uuid4().hex[:8]}.jpg"
     path = RESULTS_DIR / name
@@ -337,9 +432,35 @@ def _crop_face_region(image: np.ndarray, padding_percent: float, use_detector: b
 
 
 def _fft_energy_components(gray: np.ndarray):
+    """
+    Decompose the 2-D power spectrum of a grayscale image into low-frequency
+    and high-frequency energy bands.
+
+    Power Spectral Density (PSD)
+    ----------------------------
+    By Parseval's theorem, the total signal energy is conserved between the
+    spatial and frequency domains:
+
+        Σ |f(x,y)|²  =  (1/N²) Σ |F(u,v)|²
+
+    where N = image_height × image_width.  We normalise each |F(u,v)|² by N²
+    so that energy values are independent of image resolution (otherwise a
+    larger image would trivially produce more "energy").
+
+    Low-frequency energy  : sum of PSD inside a circular radius of (min(H,W)/8)
+                            around the DC centre.  Represents smooth luminance,
+                            skin tone, and slow-varying features.
+    High-frequency energy : sum of PSD outside that circle.  Represents edges,
+                            fine texture, wrinkles — the components modified by
+                            the aging / de-aging pipeline.
+
+    hfLfRatio  = high_energy / low_energy
+        • A high ratio indicates a texture-rich, aged-looking face.
+        • This ratio is compared before/after processing in the Analysis tab.
+    """
     spectrum = np.fft.fftshift(np.fft.fft2(gray))
     magnitude = np.abs(spectrum)
-    # Normalize FFT energy with Parseval scaling so values are comparable
+    # Normalise FFT energy with Parseval scaling so values are comparable
     # across image sizes instead of growing with the square of pixel count.
     norm = float(gray.shape[0] * gray.shape[1]) ** 2
     energy_map = (magnitude ** 2) / max(norm, 1.0)
@@ -347,23 +468,25 @@ def _fft_energy_components(gray: np.ndarray):
     h, w = gray.shape
     cy, cx = h // 2, w // 2
     yy, xx = np.ogrid[:h, :w]
+    # Low-frequency circle radius: 1/8 of the shorter image dimension
     radius = max(8, min(h, w) // 8)
     low_mask = (yy - cy) ** 2 + (xx - cx) ** 2 <= radius * radius
 
-    low_energy = float(np.sum(energy_map[low_mask]))
+    low_energy  = float(np.sum(energy_map[low_mask]))
     high_energy = float(np.sum(energy_map[~low_mask]))
     total_energy = low_energy + high_energy
+    # Ratio guard: +1e-9 avoids division by zero on flat (zero-variance) images
     hf_lf_ratio = float(high_energy / (low_energy + 1e-9))
 
     return {
-        "spectrum": spectrum,
+        "spectrum":  spectrum,
         "magnitude": magnitude,
         "energyMap": energy_map,
         "energy": {
-            "total": total_energy,
-            "high": high_energy,
-            "low": low_energy,
-            "hfLfRatio": hf_lf_ratio,
+            "total":      total_energy,
+            "high":       high_energy,
+            "low":        low_energy,
+            "hfLfRatio":  hf_lf_ratio,
         },
     }
 
@@ -558,16 +681,14 @@ def _build_age_region_masks(image: np.ndarray, preserve_edges: bool = True) -> d
     if np.count_nonzero(skin_in_face) < face_area * 0.12:
         skin_in_face = face_mask.copy()
 
+    # Feature-protection mask: only eyes, nose, mouth, eyebrows.
+    # Canny edges are intentionally NOT included here — adding them would make
+    # the protect mask cover most textured skin and kill the processing_float,
+    # leaving wrinkle / HPF effects invisible.  Edge-aware output restoration
+    # is handled separately inside _frequency_age_pipeline.
     protect = np.zeros((h, w), dtype=np.uint8)
     if not _fill_feature_masks_from_landmarks(protect, raw_points):
         _fill_feature_masks(protect, (x, y, bw, bh))
-
-    if preserve_edges:
-        gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
-        edges = cv2.Canny(gray, 70, 150)
-        edge_kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (3, 3))
-        edges = cv2.dilate(edges, edge_kernel, iterations=1)
-        protect = cv2.max(protect, edges)
 
     blur_size = _odd_kernel(min(h, w) // 12, 15)
     skin_float = cv2.GaussianBlur(skin_in_face.astype(np.float32) / 255.0, (blur_size, blur_size), 0)
@@ -578,10 +699,10 @@ def _build_age_region_masks(image: np.ndarray, preserve_edges: bool = True) -> d
     protected_float = cv2.GaussianBlur(protect.astype(np.float32) / 255.0, (protect_size, protect_size), 0)
     protected_float = np.clip(protected_float, 0.0, 1.0)
 
-    if preserve_edges:
-        processing_float = skin_float * (1.0 - 0.82 * protected_float)
-    else:
-        processing_float = skin_float
+    # processing_float: where wrinkles / HPF effects are applied.
+    # Exclude only the compact facial-feature regions (eyes, nose, mouth) —
+    # the wide skin/forehead/cheek area stays fully active.
+    processing_float = skin_float * (1.0 - 0.72 * protected_float)
     processing_float = np.clip(processing_float, 0.0, 1.0)
 
     return {
@@ -595,36 +716,109 @@ def _build_age_region_masks(image: np.ndarray, preserve_edges: bool = True) -> d
 
 
 def _frequency_mask(shape: tuple[int, int], filter_name: str) -> np.ndarray:
+    """
+    Build a 2-D frequency-domain filter mask in the *shifted* spectrum space,
+    where the DC component (zero frequency) sits at the image centre.
+
+    Radial normalisation
+    --------------------
+    All distances are normalised to [0, 1] by dividing by the half-diagonal of
+    the spectrum, so the same cutoff fraction D₀ works for any image resolution.
+
+    Filter designs (Low-Pass, then HPF = 1 − LPF)
+    -----------------------------------------------
+    Gaussian LPF   H(r) = exp(−r² / (2·D₀²))
+        • Infinitely smooth roll-off; the spatial-domain PSF is also Gaussian.
+        • No ringing artefacts — preferred for natural-looking smoothing.
+
+    Butterworth LPF (order n=2)   H(r) = 1 / (1 + (r / D₀)^(2n))
+        • Steeper transition band than Gaussian, still no hard discontinuity.
+        • Balances sharpness of cut with freedom from Gibbs ringing.
+
+    Ideal (brick-wall) LPF   H(r) = 1 if r ≤ D₀ else 0
+        • Perfect frequency separation but the sharp discontinuity in the
+          frequency domain produces strong ringing (Gibbs phenomenon) in the
+          reconstructed spatial image — useful mainly for analysis.
+
+    HPF variants
+    ------------
+    Return (1 − LPF) so that only high-frequency components (edges, texture,
+    wrinkles) are passed and low-frequency (smooth luminance) is suppressed.
+    This is the core mechanism for the *aging* path: amplifying high-frequency
+    content makes the skin appear more textured / aged.
+    """
     h, w = shape
     cy, cx = h // 2, w // 2
     yy, xx = np.ogrid[:h, :w]
+    # Euclidean distance from DC centre for every pixel in the spectrum
     radius = np.sqrt((yy - cy) ** 2 + (xx - cx) ** 2)
+    # Normalise so the corner of the spectrum is radius ≈ 1.0
     radius = radius / (np.sqrt(cy * cy + cx * cx) + 1e-6)
 
     is_high = filter_name.endswith("_hpf")
+    # Cutoff frequencies D₀ chosen so visual effect is meaningful on face crops:
+    # LPF cutoffs are slightly higher (keep more detail); HPF cutoffs are lower
+    # (remove more smooth background and keep fine texture).
     low_cutoffs = {
-        "gaussian_lpf": 0.28,
+        "gaussian_lpf":    0.28,
         "butterworth_lpf": 0.20,
-        "ideal_lpf": 0.13,
-        "gaussian_hpf": 0.22,
+        "ideal_lpf":       0.13,
+        "gaussian_hpf":    0.22,
         "butterworth_hpf": 0.17,
-        "ideal_hpf": 0.12,
+        "ideal_hpf":       0.12,
     }
     cutoff = low_cutoffs.get(filter_name, 0.20)
 
     if filter_name.startswith("gaussian"):
+        # Gaussian LPF: smooth frequency-domain envelope
         low = np.exp(-(radius ** 2) / (2.0 * cutoff * cutoff))
     elif filter_name.startswith("butterworth"):
+        # Butterworth LPF order-2: steeper roll-off, minimal ringing
         low = 1.0 / (1.0 + (radius / (cutoff + 1e-6)) ** 4)
     else:
+        # Ideal (brick-wall) LPF: binary mask at cutoff radius
         low = (radius <= cutoff).astype(np.float32)
 
+    # For HPF: invert the LPF mask (high = 1 − low)
     return (1.0 - low if is_high else low).astype(np.float32)
 
 
 def _frequency_reconstruct(channel: np.ndarray, filter_name: str) -> np.ndarray:
+    """
+    Apply a frequency-domain filter to a single-channel (grayscale) image and
+    return the filtered result in the spatial domain.
+
+    2-D FFT filtering pipeline
+    --------------------------
+    Step 1 — Forward transform:   F = fft2(channel)
+        Convert the spatial image to the complex frequency domain.
+        Each coefficient F[u,v] represents the amplitude and phase of the
+        sinusoidal component at spatial frequency (u, v).
+
+    Step 2 — Centre the spectrum: F_s = fftshift(F)
+        Rearrange quadrants so that DC (u=0, v=0, the mean intensity) sits at
+        the array centre.  This makes the radial filter mask trivial to compute.
+
+    Step 3 — Multiply by mask:    F_filtered = F_s * H(u,v)
+        Element-wise multiplication in the frequency domain is equivalent to
+        *convolution* with the filter's impulse response in the spatial domain
+        (Convolution Theorem).  H(u,v) is the filter mask from _frequency_mask.
+
+    Step 4 — Unshift:             F_back = ifftshift(F_filtered)
+        Undo the quadrant swap before applying the inverse transform.
+
+    Step 5 — Inverse transform:   recon = Re{ ifft2(F_back) }
+        Convert back to the spatial domain.  We retain only the real part;
+        any imaginary residual is purely due to floating-point rounding and is
+        numerically negligible for real-valued inputs.
+
+    The output is in the same pixel-intensity scale as the input channel.
+    """
+    # Step 1+2: FFT and shift DC to centre
     spec = np.fft.fftshift(np.fft.fft2(channel.astype(np.float32)))
+    # Step 3: build and apply frequency-domain filter mask
     mask = _frequency_mask(channel.shape, filter_name)
+    # Steps 4+5: un-shift and inverse FFT; keep real part only
     recon = np.fft.ifft2(np.fft.ifftshift(spec * mask)).real
     return recon.astype(np.float32)
 
@@ -718,7 +912,10 @@ def _generate_landmark_wrinkle_layer(shape: tuple[int, int], landmarks, face_box
         mid = (left + right) * 0.5 + np.array([0.0, eye_span * 0.020], dtype=np.float32)
         _draw_wrinkle_curve(layer, [left, mid, right], thickness)
 
-    layer = cv2.GaussianBlur(layer, (3, 3), 0)
+    # Blur radius scales with image size: ~min(h,w)/30 px ensures that drawn
+    # wrinkle strokes become wide, soft shadows rather than sharp black lines.
+    blur_k = _odd_kernel(max(7, int(min(h, w) / 30)))
+    layer = cv2.GaussianBlur(layer, (blur_k, blur_k), blur_k * 0.35)
     return layer * float(semantic_boost)
 
 
@@ -768,7 +965,9 @@ def _generate_wrinkle_layer(shape: tuple[int, int], face_box: tuple[int, int, in
             slope = bh * float(rng.uniform(-0.018, 0.018))
             _draw_wrinkle_line(layer, (cx, cy), (cx + side * length, cy + slope), thickness)
 
-    layer = cv2.GaussianBlur(layer, (3, 3), 0)
+    # Blur radius scales with image size so drawn strokes become soft shadows
+    blur_k = _odd_kernel(max(7, int(min(h, w) / 30)))
+    layer = cv2.GaussianBlur(layer, (blur_k, blur_k), blur_k * 0.35)
     return layer * float(semantic_boost)
 
 
@@ -826,7 +1025,10 @@ def _generate_age_shadow_layer(shape: tuple[int, int], face_box: tuple[int, int,
         cv2.line(layer, (int(x + bw * 0.40), int(y + bh * 0.59)), (int(x + bw * 0.34), int(y + bh * 0.76)), -1.0, max(2, int(min(w, h) / 190)), lineType=cv2.LINE_AA)
         cv2.line(layer, (int(x + bw * 0.60), int(y + bh * 0.59)), (int(x + bw * 0.66), int(y + bh * 0.76)), -1.0, max(2, int(min(w, h) / 190)), lineType=cv2.LINE_AA)
 
-    layer = cv2.GaussianBlur(layer, (_odd_kernel(max(5, int(min(w, h) * 0.012))), _odd_kernel(max(5, int(min(w, h) * 0.012)))), 0)
+    # Use a larger blur (~3% of image) so nasolabial/shadow lines look like
+    # soft depth shading rather than sharp geometric strokes.
+    blur_k = _odd_kernel(max(11, int(min(w, h) * 0.030)))
+    layer = cv2.GaussianBlur(layer, (blur_k, blur_k), blur_k * 0.40)
     return np.clip(layer, -1.0, 0.35)
 
 
@@ -947,6 +1149,53 @@ def _frequency_age_pipeline(
     semantic_boost: float = 1.0,
     save_debug: bool = False,
 ) -> tuple[np.ndarray, dict]:
+    """
+    Frequency-domain face aging / de-aging pipeline.
+
+    Core DSP principle
+    ------------------
+    Human skin *ages* by accumulating fine-scale surface texture (wrinkles,
+    pores, micro-shadows) — which correspond to *high spatial frequencies*.
+    Conversely, *younger* skin is smoother, dominated by *low frequencies*.
+
+    Aging path  (mode == 'aging')
+    ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    1. Extract the high-frequency residual from the luminance channel via HPF:
+           high = HPF(L)  ≈  L − LPF(L)
+       This isolates the texture layer that aging adds.
+    2. Amplify and add it back to the luminance:
+           L' = L + α · high
+       α is controlled by `intensity`, `detail`, and the selected HPF type.
+    3. Overlay a synthetic wrinkle layer (procedural geometry drawn on a float
+       canvas) — adds anatomically-placed crease geometry not present in HPF.
+    4. Add soft depth shadows under eyes and around nasolabial folds.
+    5. Apply CLAHE (local contrast enhancement) to simulate loss of skin
+       elasticity; aged skin shows higher intra-region contrast variation.
+
+    De-aging path  (mode == 'deaging')
+    ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    1. Extract the smooth low-frequency component via LPF:
+           smooth = LPF(L)
+    2. Blend toward the smooth signal:
+           L' = L · (1 − β) + smooth · β
+       β is controlled by `intensity` and `detail`.
+    3. Mix with bilateral filter output for edge-aware smoothing that preserves
+       the eye / lip contour while softening the skin (gaussian blur would blur
+       important features too).
+    4. If `preserve_edges` is True, restore high-frequency detail at protected
+       landmarks (eyes, nose, mouth) to prevent the face from looking blurry.
+
+    Both paths
+    ~~~~~~~~~~
+    - All processing is performed in CIE L*a*b* colour space so that the
+      luminance (L*) modifications do not introduce unintended hue or chroma
+      shifts.  Only a subtle colour-tone adjustment (a*, b* channels) is added
+      via _apply_lab_color_tone.
+    - The skin mask gates all modifications so the background, eyes, teeth,
+      and hair are not affected by the texture / smoothness edits.
+    - Optional photon-noise grain is added in the aging path to simulate the
+      appearance of skin micro-surface roughness on camera.
+    """
     seed = _make_deterministic_seed(image, mode, strength, years, contrast, tone, noise, detail, hpf, lpf, preserve_edges, semantic_boost)
     rng = np.random.default_rng(seed) if deterministic else np.random.default_rng()
     masks = _build_age_region_masks(image, preserve_edges=preserve_edges)
@@ -954,57 +1203,77 @@ def _frequency_age_pipeline(
     processing = masks["processingMask"].astype(np.float32)
     protected = masks["protectedMask"].astype(np.float32)
 
-    # Exclude hair regions: wrinkles and noise must not land on hair, lashes, or beard shadow
-    hair_excl = _build_hair_exclusion_mask(image, skin, masks["faceBox"])
-    processing = np.clip(processing - hair_excl * 0.90, 0.0, 1.0)
-
+    # Work in L*a*b* to decouple luminance edits from colour
     lab = cv2.cvtColor(image, cv2.COLOR_BGR2LAB).astype(np.float32)
     l_orig = lab[:, :, 0].copy()
     l_mod = l_orig.copy()
     intensity = _age_intensity(strength, years, semantic_boost)
 
     if mode == "aging":
+        # ── Step 1: High-Pass Filter on luminance ────────────────────────
+        # The HPF residual isolates micro-texture (edges, pores, fine lines).
+        # Clipping to ±45 prevents extreme pixel spikes on high-contrast edges
+        # from creating black halos when the residual is amplified.
         high = np.clip(_frequency_reconstruct(l_orig, hpf), -45.0, 45.0)
+
+        # ── Step 2: Texture amplification ────────────────────────────────
+        # hpf_gain accounts for the different transition-band steepness of each
+        # filter type — Ideal HPF passes more high-freq energy than Gaussian,
+        # so its gain is higher to produce a comparable visual strength at the
+        # same `strength` slider value.
         hpf_gain = {"gaussian_hpf": 0.85, "butterworth_hpf": 1.08, "ideal_hpf": 1.34}.get(hpf, 1.0)
         detail_gain = 0.70 + detail * 0.95
         l_mod += processing * high * (0.78 + 1.58 * intensity) * hpf_gain * detail_gain
 
+        # ── Step 3: Procedural wrinkle geometry ──────────────────────────
+        # Draws anatomically-placed crease strokes on a float layer, then adds
+        # them to luminance.  Strokes are heavily blurred (~min(h,w)/30 px) so
+        # they appear as soft shadow-highlight pairs, not hard geometric lines.
         wrinkle_layer = _generate_wrinkle_layer(l_orig.shape, masks["faceBox"], rng, semantic_boost, masks.get("landmarks"))
-        wrinkle_gain = (9.0 + 31.0 * intensity) * (0.58 + detail * 0.46)
-        # Gate wrinkle application to regions where processingMask > 0.25,
-        # preventing wrinkle patterns from bleeding into lips, eyes, teeth, or hair.
-        wrinkle_mask = np.where(processing > 0.25, processing, 0.0).astype(np.float32)
-        l_mod += wrinkle_mask * wrinkle_layer * wrinkle_gain
+        wrinkle_gain = (6.0 + 20.0 * intensity) * (0.58 + detail * 0.46)
+        l_mod += processing * wrinkle_layer * wrinkle_gain
 
+        # ── Step 4: Soft shadow layer ────────────────────────────────────
+        # Adds subtle darkening under the eyes and along nasolabial folds to
+        # simulate the depth shadows that become more pronounced with age.
         shadow_layer = _generate_age_shadow_layer(l_orig.shape, masks["faceBox"], masks.get("landmarks"), rng)
         l_mod += skin * shadow_layer * (6.0 + 24.0 * intensity)
 
+        # ── Step 5: Local contrast enhancement (CLAHE) ───────────────────
+        # CLAHE (Contrast Limited Adaptive Histogram Equalisation) operates on
+        # small 8×8 tiles.  Higher clipLimit → more micro-contrast, simulating
+        # the uneven skin surface texture of aged skin.
         clahe = cv2.createCLAHE(clipLimit=1.35 + 1.45 * intensity, tileGridSize=(8, 8))
         local_contrast = clahe.apply(np.clip(l_orig, 0, 255).astype(np.uint8)).astype(np.float32)
         l_mod = l_mod * (1.0 - processing * 0.13 * intensity) + local_contrast * (processing * 0.13 * intensity)
     else:
+        # ── De-aging: Low-Pass Filter smoothing ──────────────────────────
+        # The LPF retains only the low-frequency (smooth) component of L*.
+        # Blending toward this signal selectively removes high-frequency texture
+        # (wrinkles, pores) while preserving overall face shape and shading.
         low = _frequency_reconstruct(l_orig, lpf)
+
+        # ── Edge-aware smoothing via bilateral filter ─────────────────────
+        # The bilateral filter smooths luminance while preserving sharp edges
+        # (eye contours, lip boundary).  sigmaColor / sigmaSpace are proportional
+        # to `strength` so the user controls the smoothing degree.
         bilateral = cv2.bilateralFilter(
             np.clip(l_orig, 0, 255).astype(np.uint8),
             d=9,
             sigmaColor=34 + 54 * strength,
             sigmaSpace=34 + 44 * strength,
         ).astype(np.float32)
-        # Edge-preserving filter for natural skin smoothing without smearing fine features
-        ep_bgr = cv2.edgePreservingFilter(
-            np.clip(image, 0, 255).astype(np.uint8),
-            flags=1,  # RECURS_FILTER — best edge retention
-            sigma_s=float(max(10, 20 + int(30 * strength))),
-            sigma_r=float(_clamp(0.12 + 0.12 * strength, 0.05, 0.40)),
-        )
-        ep_l = cv2.cvtColor(ep_bgr, cv2.COLOR_BGR2LAB)[:, :, 0].astype(np.float32)
-        # Blend LPF + bilateral + edge-preserving for layered, natural skin smoothing
-        smooth = low * 0.28 + bilateral * 0.38 + ep_l * 0.34
+
+        # Blend FFT-LPF result with bilateral output: FFT handles global low-freq
+        # shape; bilateral handles local edge preservation.
+        smooth = low * 0.46 + bilateral * 0.54
         lpf_gain = {"gaussian_lpf": 0.78, "butterworth_lpf": 1.00, "ideal_lpf": 1.24}.get(lpf, 1.0)
         smooth_strength = _clamp(intensity * (0.56 + (1.0 - detail) * 0.30) * lpf_gain, 0.0, 0.88)
         l_mod = l_mod * (1.0 - processing * smooth_strength) + smooth * (processing * smooth_strength)
 
         if preserve_edges:
+            # Re-inject HPF residual at protected landmarks (eyes, nose, mouth)
+            # so that facial features stay sharp even after strong smoothing.
             protected_detail = np.clip(_frequency_reconstruct(l_orig, "gaussian_hpf"), -28.0, 28.0)
             l_mod += protected * protected_detail * (0.22 + 0.18 * detail)
 
@@ -1022,14 +1291,14 @@ def _frequency_age_pipeline(
         noise_mask = np.clip(processing * (1.0 - np.clip(protected, 0.0, 1.0)), 0.0, 1.0)
         processed += grain * noise_mask[:, :, None]
 
-    # Exclude hair from the final blend so hair pixels are taken from the original image
-    blend = np.clip((skin - hair_excl * 0.85) * (0.70 + 0.30 * strength), 0.0, 1.0)
-    if preserve_edges:
-        blend *= 1.0 - protected * 0.68
+    blend = np.clip(skin * (0.70 + 0.30 * strength), 0.0, 1.0)
     out = image.astype(np.float32) * (1.0 - blend[:, :, None]) + processed * blend[:, :, None]
 
     if preserve_edges:
-        restore = protected * np.clip(0.48 + 0.25 * (1.0 - strength), 0.0, 0.72)
+        # Restore original pixel values at sharp feature boundaries (eyes, nose,
+        # mouth) using the landmark-based protect mask — not Canny edges, so that
+        # only compact feature regions are restored and skin wrinkles remain.
+        restore = protected * np.clip(0.40 + 0.20 * (1.0 - strength), 0.0, 0.60)
         out = out * (1.0 - restore[:, :, None]) + image.astype(np.float32) * restore[:, :, None]
 
     if mode == "aging" and intensity > 0.1:
@@ -2233,17 +2502,47 @@ def _warp_triangle(
     interp: int = cv2.INTER_CUBIC,
 ) -> None:
     """
-    Affine-warp one Delaunay triangle from src into dst with a feathered alpha mask.
+    Warp one Delaunay triangle from the source image into the destination using
+    an affine transformation, then alpha-blend it into the destination buffer.
 
-    Rejection criteria (applied in order, cheapest first):
-    - Bounding rect width or height is zero.
-    - Source or destination area < 4 px² (degenerate / sub-pixel triangle).
-    - Area ratio dst/src > 5 or src/dst > 5 (extreme compression / expansion).
-    - Longest edge of destination triangle > 8 × shortest edge (degenerate sliver).
+    Affine Transformation Theory
+    -----------------------------
+    An affine transform maps triangle t_src → t_dst via a 2×3 matrix M:
 
-    Feathering radius scales with triangle size so small triangles get a tight
-    1-px blur while large triangles get a slightly wider feather, keeping seams
-    invisible at all scales.
+        [x']   [m00 m01 m02] [x]
+        [y'] = [m10 m11 m12] [y]
+                              [1]
+
+    Given exactly 3 non-collinear point correspondences, M has a unique
+    solution (cv2.getAffineTransform).  The mapping preserves:
+      • Straight lines (collinearity)
+      • Parallel lines (parallelism)
+      • Ratios of distances along lines
+
+    It does NOT preserve angles or lengths in general — that is what enables
+    the natural-looking local deformation needed for expression warping.
+
+    Algorithm
+    ---------
+    1. Compute bounding rectangles r1 (source) and r2 (destination) to work on
+       cropped patches rather than the full image — avoids allocating a full-size
+       warp for every triangle (significant performance saving).
+
+    2. Express triangle vertices relative to their bounding-rect origins so the
+       cv2.warpAffine call operates on the small patch only.
+
+    3. Create an anti-aliased binary fill mask for the destination triangle and
+       apply a 1-pixel Gaussian feather to soften triangle-boundary seams.
+
+    4. Blend the warped patch into the destination:
+           dst_roi = dst_roi * (1 − mask) + warped * mask
+       The soft mask eliminates the hard edges that would otherwise appear at
+       the boundary between adjacent triangles (seam artefacts).
+
+    Degenerate triangle guard
+    -------------------------
+    Triangles with area < 4 px² or with a dst/src area ratio > 5 (extreme
+    distortion) are skipped to prevent ringing or black-fill artefacts.
     """
     area_src = abs(_triangle_area(t_src))
     area_dst = abs(_triangle_area(t_dst))
@@ -2266,6 +2565,7 @@ def _warp_triangle(
     if r1[2] <= 0 or r1[3] <= 0 or r2[2] <= 0 or r2[3] <= 0:
         return
 
+    # Shift vertices to be relative to their bounding-rect top-left corners
     t1_rect = np.float32([[t_src[i][0] - r1[0], t_src[i][1] - r1[1]] for i in range(3)])
     t2_rect = np.float32([[t_dst[i][0] - r2[0], t_dst[i][1] - r2[1]] for i in range(3)])
 
@@ -2284,6 +2584,7 @@ def _warp_triangle(
     if src_patch.size == 0:
         return
 
+    # Compute and apply the 2×3 affine matrix for this triangle pair
     mat = cv2.getAffineTransform(t1_rect, t2_rect)
     warped = cv2.warpAffine(
         src_patch, mat, (r2[2], r2[3]),
@@ -2295,6 +2596,7 @@ def _warp_triangle(
     if dst_roi.shape[:2] != warped.shape[:2]:
         return
 
+    # Alpha-blend warped patch into the destination using the feathered mask
     mask3 = mask[:, :, None]
     dst[r2[1]:r2[1] + r2[3], r2[0]:r2[0] + r2[2]] = (
         dst_roi * (1.0 - mask3) + warped * mask3
@@ -2613,7 +2915,10 @@ def _apply_expression_warp(
 
 @app.get("/")
 def index_page():
-    return send_from_directory(ROOT, "index.html")
+    resp = send_from_directory(ROOT, "index.html")
+    resp.headers["Cache-Control"] = "no-store, no-cache, must-revalidate"
+    resp.headers["Pragma"] = "no-cache"
+    return resp
 
 
 @app.get("/style.css")
@@ -2623,7 +2928,10 @@ def style_page():
 
 @app.get("/app.js")
 def script_page():
-    return send_from_directory(ROOT, "app.js")
+    resp = send_from_directory(ROOT, "app.js")
+    resp.headers["Cache-Control"] = "no-store, no-cache, must-revalidate"
+    resp.headers["Pragma"] = "no-cache"
+    return resp
 
 
 @app.get("/results/<path:filename>")
@@ -2781,6 +3089,37 @@ def api_landmarks():
 
 @app.post("/api/analysis")
 def api_analysis():
+    """
+    Evaluation Layer — quantitative comparison of original vs. transformed image.
+
+    Metrics computed
+    ----------------
+    MSE  (Mean Squared Error)
+        MSE = (1/N) Σ (f(x,y) − g(x,y))²
+        Measures average pixel-level deviation.  Range [0, ∞); lower = more
+        similar.  Works in the spatial domain on grayscale luminance.
+
+    PSNR  (Peak Signal-to-Noise Ratio)
+        PSNR = 20 · log₁₀(MAX / √MSE)   where MAX = 255 for uint8 images.
+        Expresses similarity in decibels.  Higher = better quality.
+        • > 40 dB : virtually indistinguishable  (de-aging / subtle expression)
+        • 30–40 dB: good quality               (moderate aging)
+        • < 30 dB : visible differences        (strong aging / heavy warp)
+        A flat (identical) image reports 99 dB as a sentinel for MSE = 0.
+
+    SSIM  (Structural Similarity Index)
+        SSIM ∈ [−1, 1]; 1 = identical.  Computed with scikit-image using a
+        sliding Gaussian window.  Unlike MSE/PSNR, SSIM models human perception
+        by comparing luminance, contrast, AND structure simultaneously.
+
+    FFT Energy comparison
+        For each image the power spectrum is decomposed into low-frequency and
+        high-frequency energy bands (see _fft_energy_components).  The delta
+        shows how much the transformation changed the frequency distribution:
+        • Aging increases hfLfRatio (more texture energy)
+        • De-aging decreases hfLfRatio (more smooth energy)
+        This confirms the DSP algorithm is working as intended.
+    """
     started = time.perf_counter()
 
     try:
@@ -2874,7 +3213,7 @@ def api_aging():
 
     method = (request.form.get("method", "freq") or "freq").strip().lower()
     if method not in ALLOWED_AGING_METHODS:
-        return _error("Invalid method. Use 'freq' or 'ai'.", 400)
+        return _error("Invalid method. Use 'freq', 'ai', or 'classical'.", 400)
 
     hpf = (request.form.get("hpf", "gaussian_hpf") or "gaussian_hpf").strip().lower()
     if hpf not in ALLOWED_HPF_FILTERS:
@@ -2902,9 +3241,43 @@ def api_aging():
     noise = _clamp(noise, 0.0, 1.0)
     detail = _clamp(detail, 0.0, 1.0)
     years = max(-50, min(50, years))
-    save_debug = request.form.get("debug", "false").strip().lower() in {"1", "true", "yes"}
 
-    if method == "ai":
+    print("=" * 60, flush=True)
+    print("AGING ENDPOINT CALLED", flush=True)
+    print(f"  method   = {method!r}", flush=True)
+    print(f"  mode     = {mode!r}", flush=True)
+    print(f"  strength = {strength:.3f}  (forced to 1.0 for debug)", flush=True)
+    print(f"  years    = {years}", flush=True)
+    print(f"  image    = {image.shape}  dtype={image.dtype}", flush=True)
+    print("=" * 60, flush=True)
+
+    if method == "classical":
+        # ── Classical DSP path: aging.py (DoG HPF + CLAHE + hair greying) ──
+        if _classical_aging_effect is None:
+            return _error("Classical aging module (aging.py) could not be loaded.", 500)
+        # Fetch MediaPipe landmarks so aging.py can use region-specific masks.
+        classical_lm: list = []
+        try:
+            classical_lm = _get_mediapipe_points(image)
+        except Exception:
+            pass
+        print(f"  apply_aging_effect called: landmarks={len(classical_lm)} pts  "
+              f"intensity={strength:.3f}", flush=True)
+        out = _classical_aging_effect(
+            image,
+            landmarks=classical_lm or None,
+            intensity=strength,
+        )
+        diff = float(np.abs(out.astype(np.int32) - image.astype(np.int32)).mean())
+        print(f"  apply_aging_effect DONE: mean_abs_diff={diff:.3f}", flush=True)
+        if diff < 2.0:
+            print("  WARNING: Aging effect too weak or not applied. "
+                  f"mean_abs_diff={diff:.3f} < 2.0", flush=True)
+        model_status = "classical-dsp"
+        transform_meta = {"maskMethod": "classical"}
+        freq_variant = out
+        ai_variant = out
+    elif method == "ai":
         out, model_status, transform_meta = _ai_age_pipeline(
             image=image,
             mode=mode,
@@ -2953,24 +3326,23 @@ def api_aging():
             semantic_boost=1.0,
             save_debug=save_debug,
         )
+        diff = float(np.abs(out.astype(np.int32) - image.astype(np.int32)).mean())
+        print(f"  freq pipeline DONE: mean_abs_diff={diff:.3f}", flush=True)
+        if diff < 2.0:
+            print("  WARNING: Aging effect too weak or not applied. "
+                  f"mean_abs_diff={diff:.3f} < 2.0", flush=True)
         model_status = "frequency-dsp"
         freq_variant = out
-        # AI comparison: boosted parameters for a visually distinct comparison thumbnail
-        ai_variant, _ = _frequency_age_pipeline(
-            image=image,
-            mode=mode,
-            strength=_clamp(strength * 1.10, 0.0, 1.0),
-            years=years,
-            contrast=contrast,
-            tone=tone,
-            noise=noise,
-            detail=_clamp(detail + 0.14, 0.0, 1.0),
-            deterministic=deterministic,
-            hpf=hpf,
-            lpf=lpf,
-            preserve_edges=preserve_edges,
-            semantic_boost=1.28,
-        )
+        ai_variant = out
+
+    # Generate classical variant thumbnail for all methods (side-by-side compare)
+    if _classical_aging_effect is not None and method != "classical":
+        try:
+            classical_out = _classical_aging_effect(image, intensity=strength)
+        except Exception:
+            classical_out = out
+    else:
+        classical_out = out
 
     gray_before = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY).astype(np.float32)
     gray_after = cv2.cvtColor(out, cv2.COLOR_BGR2GRAY).astype(np.float32)
@@ -3006,13 +3378,249 @@ def api_aging():
             "skinHighFrequencyEnergy": transform_meta.get("skinHighFrequencyEnergy"),
             "debugMasks": transform_meta.get("debugMasks"),
             "variants": {
-                "frequency": _thumbnail_b64(freq_variant),
-                "ai": _thumbnail_b64(ai_variant),
+                "frequency":  _thumbnail_b64(freq_variant),
+                "ai":         _thumbnail_b64(ai_variant),
+                "classical":  _thumbnail_b64(classical_out),
             },
             "saved": saved,
             "durationMs": round(elapsed_ms, 2),
         }
     )
+
+
+# ---------------------------------------------------------------------------
+# AI aging — Replicate image-editing helper
+# ---------------------------------------------------------------------------
+# Frequency mode (method="freq") uses the local classical DSP pipeline:
+#   HPF amplification, CLAHE, hair greying — runs entirely locally.
+# AI mode (method="ai") sends the image to the Replicate API for AI-based aging.
+#   Requires REPLICATE_API_TOKEN in the .env file (never hardcoded).
+#   Uses FLUX Kontext Pro on Replicate for high-quality image-to-image face aging.
+
+# ---------------------------------------------------------------------------
+# Replicate aging — FLUX Kontext Pro (image-to-image editing)
+# ---------------------------------------------------------------------------
+
+# Model identifier on Replicate — supports image-to-image editing with a prompt.
+_REPLICATE_MODEL = "black-forest-labs/flux-kontext-pro"
+
+# Prompt template; {degree} is substituted based on intensity.
+_AGING_PROMPT_TEMPLATE = (
+    "Make this person look {degree}. "
+    "Add realistic facial wrinkles, aged skin texture, age spots, and gray hair. "
+    "Keep the same identity, pose, background, and lighting. "
+    "Do not change the face shape dramatically."
+)
+
+
+def call_replicate_aging(image_bytes: bytes, intensity: float = 0.5) -> bytes:
+    """
+    Sends a portrait to the Replicate FLUX Kontext Pro model and returns
+    the aged image as raw bytes.
+
+    The API token is read from the REPLICATE_API_TOKEN environment variable
+    (loaded from .env via load_dotenv at startup).
+    Do NOT hardcode secrets.
+
+    Parameters
+    ----------
+    image_bytes : bytes
+        JPEG-encoded input portrait.
+    intensity : float
+        0.0–1.0 scale controlling how much older the result should look.
+
+    Returns
+    -------
+    bytes
+        Raw bytes of the output image (JPEG or PNG, as returned by Replicate).
+
+    Raises
+    ------
+    EnvironmentError : REPLICATE_API_TOKEN not set.
+    RuntimeError     : replicate package unavailable, API error, or no image returned.
+    """
+    # Re-load .env in case the Flask reloader spawned a fresh process.
+    _env_path = Path(__file__).resolve().parent / ".env"
+    load_dotenv(str(_env_path), override=True)
+
+    api_token = os.environ.get("REPLICATE_API_TOKEN", "").strip()
+    print(f"[call_replicate_aging] REPLICATE_API_TOKEN present: {bool(api_token)}", flush=True)
+    if not api_token:
+        raise EnvironmentError(
+            "REPLICATE_API_TOKEN is not configured. "
+            "Add it to your .env file and restart the server."
+        )
+
+    if _replicate is None:
+        raise RuntimeError(
+            "replicate is not installed. Run: pip install replicate"
+        )
+
+    # Vary the aging degree based on the requested intensity.
+    if intensity >= 0.7:
+        degree = "20-30 years older"
+    elif intensity >= 0.4:
+        degree = "10-20 years older"
+    else:
+        degree = "5-10 years older"
+
+    prompt = _AGING_PROMPT_TEMPLATE.format(degree=degree)
+
+    # Encode the image as a base64 data URI so Replicate accepts it directly.
+    img_b64 = base64.b64encode(image_bytes).decode()
+    img_data_uri = f"data:image/jpeg;base64,{img_b64}"
+
+    print(f"[call_replicate_aging] calling model: {_REPLICATE_MODEL}", flush=True)
+
+    # Instantiate a client with an explicit token — never rely on global state.
+    client = _replicate.Client(api_token=api_token)
+
+    # Run the model.  The output is either a URL string or a list of URL strings.
+    output = client.run(
+        _REPLICATE_MODEL,
+        input={
+            "input_image": img_data_uri,
+            "prompt": prompt,
+        },
+    )
+
+    # Resolve the output URL.
+    if isinstance(output, list):
+        result_url = str(output[0])
+    else:
+        result_url = str(output)
+
+    if not result_url:
+        raise RuntimeError("Replicate returned an empty output URL.")
+
+    print(f"[call_replicate_aging] output URL: {result_url[:80]}...", flush=True)
+
+    # Download the resulting image.
+    if _requests is None:
+        raise RuntimeError("requests is not installed. Run: pip install requests")
+
+    resp = _requests.get(result_url, timeout=120)
+    resp.raise_for_status()
+
+    result_bytes = resp.content
+    if not result_bytes:
+        raise RuntimeError("Replicate returned an empty image body.")
+
+    return result_bytes
+
+
+@app.post("/api/aging-ai")
+def api_aging_ai():
+    """
+    AI aging endpoint — routes to Replicate FLUX Kontext Pro (image-to-image).
+
+    This endpoint is separate from /api/aging (classical DSP / Frequency mode)
+    so that the two modes can be tested, deployed, and rate-limited independently.
+
+    Flow
+    ----
+    1. Read and validate the uploaded image.
+    2. Check REPLICATE_API_TOKEN env var — return 503 immediately if missing.
+    3. Forward the image to Replicate via call_replicate_aging().
+    4. Decode the returned bytes, save to results/, return JSON with base64 image.
+
+    Error handling
+    --------------
+    - Missing API key          → 503 + clear message.
+    - API timeout / network    → 502 + message.
+    - Invalid/empty response   → 502 + message.
+    - Bad upload / image       → 400.
+    """
+    print("AGING AI ENDPOINT CALLED - REPLICATE MODE", flush=True)
+    print("REPLICATE_API_TOKEN available:", bool(os.getenv("REPLICATE_API_TOKEN")), flush=True)
+    started = time.perf_counter()
+
+    # ── 1. Read uploaded image ────────────────────────────────────────────────
+    raw_file = request.files.get("image")
+    if raw_file is None:
+        return _error("No image uploaded.", 400)
+
+    # Keep raw bytes for forwarding; also decode for local metadata.
+    image_bytes = raw_file.read()
+    if not image_bytes:
+        return _error("Uploaded image is empty.", 400)
+
+    try:
+        image = _read_image_from_bytes(image_bytes)
+    except Exception as exc:
+        return _error(f"Could not decode image: {exc}", 400)
+
+    # ── 2. Check API token ────────────────────────────────────────────────────
+    _key_val = os.environ.get("REPLICATE_API_TOKEN", "").strip()
+    print(f"[api_aging_ai] key check: {bool(_key_val)}", flush=True)
+    if not _key_val:
+        msg = "REPLICATE_API_TOKEN is not configured. Add it to your .env file."
+        print(f"[api_aging_ai] returning 503: {msg}", flush=True)
+        return jsonify({"ok": False, "error": msg}), 503
+
+    try:
+        strength = _clamp(float(request.form.get("strength", 0.5)), 0.0, 1.0)
+        mode     = (request.form.get("mode", "aging") or "aging").strip().lower()
+        years    = max(-50, min(50, int(float(request.form.get("years", 10)))))
+    except ValueError:
+        return _error("Invalid aging parameters.", 400)
+
+    if mode not in {"aging", "deaging"}:
+        return _error("Invalid mode. Use 'aging' or 'deaging'.", 400)
+
+    # ── 3. Call Replicate image-editing API ───────────────────────────────────
+    try:
+        result_bytes = call_replicate_aging(image_bytes, intensity=strength)
+    except EnvironmentError as exc:
+        print(f"[api_aging_ai] EnvironmentError: {exc}", flush=True)
+        return jsonify({"ok": False, "error": str(exc)}), 503
+    except RuntimeError as exc:
+        print(f"[api_aging_ai] RuntimeError: {exc}", flush=True)
+        return jsonify({"ok": False, "error": str(exc)}), 502
+    except Exception as exc:
+        print(f"[api_aging_ai] Unexpected error: {exc}", flush=True)
+        return jsonify({"ok": False, "error": f"Unexpected Replicate aging error: {exc}"}), 500
+
+    # ── 4. Decode result, save, return ────────────────────────────────────────
+    try:
+        arr = np.frombuffer(result_bytes, dtype=np.uint8)
+        out = cv2.imdecode(arr, cv2.IMREAD_COLOR)
+        if out is None:
+            raise ValueError("Could not decode AI aging result as an image.")
+    except Exception as exc:
+        return jsonify({"ok": False, "error": f"AI aging result is not a valid image: {exc}"}), 502
+
+    # Resize to match input dimensions if the API changed them.
+    if out.shape[:2] != image.shape[:2]:
+        out = cv2.resize(out, (image.shape[1], image.shape[0]), interpolation=cv2.INTER_CUBIC)
+
+    try:
+        encoded = _encode_base64_jpeg(out)
+    except ValueError as exc:
+        return _error(str(exc), 500)
+
+    saved      = _save_image(out, "aging-ai")
+    elapsed_ms = (time.perf_counter() - started) * 1000.0
+
+    # Build image_url from saved path (relative to RESULTS_DIR).
+    image_url = f"/results/{Path(saved).name}" if saved else None
+
+    apparent_age_before = _estimate_base_age(image)
+    apparent_age_after  = _apparent_age_after(apparent_age_before, mode, years, strength)
+
+    return jsonify({
+        "ok":                True,
+        "image":             encoded,
+        "image_url":         image_url,
+        "method":            "ai",
+        "mode":              mode,
+        "years":             years,
+        "modelStatus":       "replicate-flux-kontext-pro",
+        "apparentAgeBefore": apparent_age_before,
+        "apparentAgeAfter":  apparent_age_after,
+        "saved":             saved,
+        "durationMs":        round(elapsed_ms, 2),
+    })
 
 
 @app.post("/api/transform")
@@ -3238,8 +3846,22 @@ def api_expression_transfer():
 
 
 if __name__ == "__main__":
+    import threading
+    import webbrowser
+
     host = os.environ.get("DSP_HOST", "127.0.0.1")
     port = int(os.environ.get("DSP_PORT", "8081"))
     debug = (os.environ.get("DSP_DEBUG", "false") or "false").strip().lower() in {"1", "true", "yes", "on"}
     use_reloader = (os.environ.get("DSP_RELOADER", "false") or "false").strip().lower() in {"1", "true", "yes", "on"}
+
+    # Automatically open the browser once the server is ready.
+    # A short delay (1.2 s) ensures Flask has bound the socket before the
+    # browser tries to connect.  The flag prevents double-open when the
+    # reloader forks a child process (WERKZEUG_RUN_MAIN is set in the child).
+    no_reloader_child = not use_reloader or os.environ.get("WERKZEUG_RUN_MAIN") == "true"
+    if not debug or no_reloader_child:
+        url = f"http://{host}:{port}"
+        threading.Timer(1.2, lambda: webbrowser.open(url)).start()
+        print(f" * Opening browser at {url}")
+
     app.run(host=host, port=port, debug=debug, use_reloader=use_reloader)

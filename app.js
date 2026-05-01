@@ -10,6 +10,9 @@ function nav(page) {
   const btn = $(`.sb-item[data-page="${page}"]`);
   if (btn) btn.classList.add('active');
   closeMobile();
+  // Re-sync photo panels when navigating to the aging page so the SVG
+  // wireframe placeholders are hidden whenever a real photo is available.
+  if (page === 'aging') syncAgingPhotoPanels();
 }
 
 $$('.sb-item[data-page]').forEach(b => {
@@ -802,7 +805,9 @@ function syncAgingPhotoPanels() {
     if (!img) {
       img = document.createElement('img');
       img.id = id; img.alt = '';
-      img.style.cssText = 'position:absolute;inset:0;width:100%;height:100%;object-fit:contain;background:#0b1220;border-radius:inherit;display:none;z-index:1;';
+      // z-index:2 ensures the photo renders above the SVG wireframe (z-index:auto≈0)
+      // regardless of DOM order inside the grid container.
+      img.style.cssText = 'position:absolute;inset:0;width:100%;height:100%;object-fit:contain;background:#0b1220;border-radius:inherit;display:none;z-index:2;';
       wrap.prepend(img);
     }
     return img;
@@ -1789,10 +1794,11 @@ if ($('#btnSimulate')) $('#btnSimulate').addEventListener('click', async functio
     const srcBlob = await buildTransformedBlobForAnalysis() || await getCurrentImageBlob();
     if (!srcBlob) throw new Error('No source image found for aging.');
 
+    const selectedMethod = $('#ageMethod .seg-btn.active')?.dataset.v || 'freq';
     const fd = new FormData();
     fd.append('image', srcBlob, 'aging-input.jpg');
     fd.append('mode', $('#ageMode .seg-btn.active')?.dataset.v || 'aging');
-    fd.append('method', $('#ageMethod .seg-btn.active')?.dataset.v || 'freq');
+    fd.append('method', selectedMethod);
     fd.append('years', String(Number($('#sTargetAge')?.value || 10)));
     fd.append('strength', String(Number($('#sAge')?.value || 50) / 100));
     fd.append('contrast', String(Number($('#sContrast')?.value || 50) / 100));
@@ -1803,7 +1809,10 @@ if ($('#btnSimulate')) $('#btnSimulate').addEventListener('click', async functio
     fd.append('hpf', $('#selHPF')?.value || 'gaussian_hpf');
     fd.append('lpf', $('#selLPF')?.value || 'gaussian_lpf');
 
-    const res = await fetch('/api/aging', { method: 'POST', body: fd });
+    const agingEndpoint = (selectedMethod === 'ai') ? '/api/aging-ai' : '/api/aging';
+    console.log('Selected aging method:', selectedMethod);
+    console.log('Aging endpoint:', agingEndpoint);
+    const res = await fetch(agingEndpoint, { method: 'POST', body: fd });
     const data = await res.json();
     if (!res.ok || !data.ok || !data.image) {
       throw new Error(data.error || 'Aging simulation failed.');
