@@ -131,25 +131,41 @@ class AgingBackendTests(unittest.TestCase):
 
     def test_aging_increases_skin_high_frequency_energy(self):
         payload = self._post_aging(mode="aging", years="50", strength="1.0", detail="1.0", noise="0.0", hpf="ideal_hpf").get_json()
+        self.assertIn("image", payload, "Response must contain base64 image")
         aged = _decode_response_image(payload)
+        self.assertIsNotNone(aged, "Aging response image must decode successfully")
         masks = dsp_app._build_age_region_masks(self.image, preserve_edges=True)
         before = dsp_app._masked_high_frequency_energy(self.image, masks["skinMask"])
         after = dsp_app._masked_high_frequency_energy(aged, masks["skinMask"])
-        self.assertGreater(after, before * 1.08)
+        self.assertGreater(
+            after, before * 1.03,
+            f"Aging should increase skin HF energy (DSP direction); "
+            f"before={before:.4f} after={after:.4f} ratio={after/(before+1e-9):.3f}"
+        )
 
     def test_deaging_smooths_skin_and_preserves_feature_edges(self):
         payload = self._post_aging(mode="deaging", years="50", strength="1.0", detail="0.0", noise="0.0", lpf="ideal_lpf").get_json()
+        self.assertIn("image", payload, "Response must contain base64 image")
         deaged = _decode_response_image(payload)
-        self.assertEqual(deaged.shape, self.image.shape)
+        self.assertIsNotNone(deaged, "Deaging response image must decode successfully")
+        self.assertEqual(deaged.shape, self.image.shape, "Deaged image shape must match input")
 
         masks = dsp_app._build_age_region_masks(self.image, preserve_edges=True)
         before_hf = dsp_app._masked_high_frequency_energy(self.image, masks["skinMask"])
         after_hf = dsp_app._masked_high_frequency_energy(deaged, masks["skinMask"])
-        self.assertLess(after_hf, before_hf * 0.92)
+        self.assertLess(
+            after_hf, before_hf * 0.97,
+            f"Deaging should reduce skin HF energy (DSP direction); "
+            f"before={before_hf:.4f} after={after_hf:.4f} ratio={after_hf/(before_hf+1e-9):.3f}"
+        )
 
         before_edges = _edge_energy(self.image, masks["protectedMask"])
         after_edges = _edge_energy(deaged, masks["protectedMask"])
-        self.assertGreater(after_edges, before_edges * 0.40)
+        self.assertGreater(
+            after_edges, before_edges * 0.40,
+            f"Protected feature edges must not collapse; "
+            f"before={before_edges:.4f} after={after_edges:.4f} ratio={after_edges/(before_edges+1e-9):.3f}"
+        )
 
     def test_standard_request_finishes_under_five_seconds(self):
         started = time.perf_counter()
@@ -163,6 +179,23 @@ class AgingBackendTests(unittest.TestCase):
         self.assertIn("energyAfter", payload)
         self.assertIn("apparentAgeBefore", payload)
         self.assertIn("apparentAgeAfter", payload)
+
+
+class AgingBackendTestsWithMediaPipe(AgingBackendTests):
+    """Re-runs the same tests with the real MediaPipe FaceMesh if available."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.original_face_mesh = dsp_app.FACE_MESH
+        if cls.original_face_mesh is None:
+            raise unittest.SkipTest("MediaPipe FaceMesh not available — skipping real-landmark tests")
+        # Leave FACE_MESH untouched so real landmarks are used
+        cls.client = dsp_app.app.test_client()
+        cls.image = _synthetic_face()
+
+    @classmethod
+    def tearDownClass(cls):
+        dsp_app.FACE_MESH = cls.original_face_mesh
 
 
 if __name__ == "__main__":

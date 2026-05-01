@@ -18,6 +18,19 @@ try:
 except Exception:  # pragma: no cover - optional dependency path
     mp = None
 
+try:
+    import dlib as _dlib  # type: ignore
+    _DLIB_DETECTOR = _dlib.get_frontal_face_detector()
+    _DLIB_PREDICTOR_PATH = Path(__file__).resolve().parent / "models" / "shape_predictor_68_face_landmarks.dat"
+    _DLIB_PREDICTOR = _dlib.shape_predictor(str(_DLIB_PREDICTOR_PATH)) if _DLIB_PREDICTOR_PATH.is_file() else None
+    DLIB_AVAILABLE = _DLIB_PREDICTOR is not None
+    print(f"Dlib available: detector=ready, predictor={'loaded' if DLIB_AVAILABLE else 'missing shape_predictor_68_face_landmarks.dat'}")
+except Exception as _dlib_exc:
+    _DLIB_DETECTOR = None
+    _DLIB_PREDICTOR = None
+    DLIB_AVAILABLE = False
+    print(f"Dlib not available: {_dlib_exc}")
+
 ROOT = Path(__file__).resolve().parent
 MODELS_DIR = ROOT / "models"
 UPLOAD_DIR = ROOT / "uploads"
@@ -181,6 +194,26 @@ def _error(message: str, status_code: int = 400):
 
 def _clamp(value: float, lo: float, hi: float) -> float:
     return max(lo, min(hi, value))
+
+
+def _get_dlib_landmarks(image: np.ndarray) -> list:
+    """Return list of (x, y) pixel tuples using dlib 68-point predictor, or empty list."""
+    if not DLIB_AVAILABLE or _DLIB_DETECTOR is None or _DLIB_PREDICTOR is None:
+        return []
+    try:
+        gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+        dets = _DLIB_DETECTOR(gray, 1)
+        if not dets:
+            return []
+        det = max(dets, key=lambda d: (d.right() - d.left()) * (d.bottom() - d.top()))
+        shape = _DLIB_PREDICTOR(gray, det)
+        h, w = image.shape[:2]
+        return [
+            (max(0, min(w - 1, shape.part(i).x)), max(0, min(h - 1, shape.part(i).y)))
+            for i in range(68)
+        ]
+    except Exception:
+        return []
 
 
 def _parse_bool(value, default: bool = True) -> bool:
@@ -854,6 +887,50 @@ def _age_intensity(strength: float, years: int, semantic_boost: float) -> float:
     return _clamp(strength * (0.65 + 0.35 * year_gain) * semantic_boost, 0.0, 1.35)
 
 
+def _build_hair_exclusion_mask(
+    image: np.ndarray,
+    skin_mask: np.ndarray,
+    face_box: tuple,
+) -> np.ndarray:
+    """
+    Build a float32 [0..1] mask of hair pixels so they can be excluded from
+    wrinkle enhancement, noise injection, and the final processed-image blend.
+
+    Strategy:
+      - Restrict to the upper-face region plus a small lateral extension (where
+        hair typically sits above and beside the face bounding box).
+      - Within that region take non-skin pixels.
+      - Refine with HSV: dark hair (low value) OR light/grey hair (low saturation).
+      - Smooth with a Gaussian blur to feather the mask edges naturally.
+    """
+    h, w = image.shape[:2]
+    x, y, bw, bh = face_box
+
+    # Region: upper face + slight lateral pad, stopping before the chin area
+    region = np.zeros((h, w), dtype=np.float32)
+    x0 = max(0, int(x - bw * 0.12))
+    x1 = min(w, int(x + bw * 1.12))
+    y0 = max(0, int(y - bh * 0.08))
+    y1 = min(h, int(y + bh * 0.88))
+    region[y0:y1, x0:x1] = 1.0
+
+    non_skin = 1.0 - np.clip(skin_mask, 0.0, 1.0)
+    hsv = cv2.cvtColor(image, cv2.COLOR_BGR2HSV)
+    val = hsv[:, :, 2].astype(np.float32) / 255.0
+    sat = hsv[:, :, 1].astype(np.float32) / 255.0
+
+    # Dark hair (val < 0.62) OR light / grey hair (sat < 0.22)
+    colour_hair = np.clip(
+        (val < 0.62).astype(np.float32) + (sat < 0.22).astype(np.float32),
+        0.0, 1.0,
+    )
+
+    hair = non_skin * region * colour_hair
+    blur_k = _odd_kernel(max(9, min(w, h) // 18))
+    hair = cv2.GaussianBlur(hair, (blur_k, blur_k), 0)
+    return np.clip(hair, 0.0, 1.0)
+
+
 def _frequency_age_pipeline(
     image: np.ndarray,
     mode: str,
@@ -868,6 +945,7 @@ def _frequency_age_pipeline(
     lpf: str,
     preserve_edges: bool,
     semantic_boost: float = 1.0,
+    save_debug: bool = False,
 ) -> tuple[np.ndarray, dict]:
     seed = _make_deterministic_seed(image, mode, strength, years, contrast, tone, noise, detail, hpf, lpf, preserve_edges, semantic_boost)
     rng = np.random.default_rng(seed) if deterministic else np.random.default_rng()
@@ -875,6 +953,10 @@ def _frequency_age_pipeline(
     skin = masks["skinMask"].astype(np.float32)
     processing = masks["processingMask"].astype(np.float32)
     protected = masks["protectedMask"].astype(np.float32)
+
+    # Exclude hair regions: wrinkles and noise must not land on hair, lashes, or beard shadow
+    hair_excl = _build_hair_exclusion_mask(image, skin, masks["faceBox"])
+    processing = np.clip(processing - hair_excl * 0.90, 0.0, 1.0)
 
     lab = cv2.cvtColor(image, cv2.COLOR_BGR2LAB).astype(np.float32)
     l_orig = lab[:, :, 0].copy()
@@ -889,7 +971,10 @@ def _frequency_age_pipeline(
 
         wrinkle_layer = _generate_wrinkle_layer(l_orig.shape, masks["faceBox"], rng, semantic_boost, masks.get("landmarks"))
         wrinkle_gain = (9.0 + 31.0 * intensity) * (0.58 + detail * 0.46)
-        l_mod += processing * wrinkle_layer * wrinkle_gain
+        # Gate wrinkle application to regions where processingMask > 0.25,
+        # preventing wrinkle patterns from bleeding into lips, eyes, teeth, or hair.
+        wrinkle_mask = np.where(processing > 0.25, processing, 0.0).astype(np.float32)
+        l_mod += wrinkle_mask * wrinkle_layer * wrinkle_gain
 
         shadow_layer = _generate_age_shadow_layer(l_orig.shape, masks["faceBox"], masks.get("landmarks"), rng)
         l_mod += skin * shadow_layer * (6.0 + 24.0 * intensity)
@@ -905,7 +990,16 @@ def _frequency_age_pipeline(
             sigmaColor=34 + 54 * strength,
             sigmaSpace=34 + 44 * strength,
         ).astype(np.float32)
-        smooth = low * 0.46 + bilateral * 0.54
+        # Edge-preserving filter for natural skin smoothing without smearing fine features
+        ep_bgr = cv2.edgePreservingFilter(
+            np.clip(image, 0, 255).astype(np.uint8),
+            flags=1,  # RECURS_FILTER — best edge retention
+            sigma_s=float(max(10, 20 + int(30 * strength))),
+            sigma_r=float(_clamp(0.12 + 0.12 * strength, 0.05, 0.40)),
+        )
+        ep_l = cv2.cvtColor(ep_bgr, cv2.COLOR_BGR2LAB)[:, :, 0].astype(np.float32)
+        # Blend LPF + bilateral + edge-preserving for layered, natural skin smoothing
+        smooth = low * 0.28 + bilateral * 0.38 + ep_l * 0.34
         lpf_gain = {"gaussian_lpf": 0.78, "butterworth_lpf": 1.00, "ideal_lpf": 1.24}.get(lpf, 1.0)
         smooth_strength = _clamp(intensity * (0.56 + (1.0 - detail) * 0.30) * lpf_gain, 0.0, 0.88)
         l_mod = l_mod * (1.0 - processing * smooth_strength) + smooth * (processing * smooth_strength)
@@ -923,9 +1017,13 @@ def _frequency_age_pipeline(
     if noise > 0.001:
         noise_scale = (18.0 if mode == "aging" else 5.5) * noise * (0.55 + 0.45 * intensity)
         grain = rng.normal(0.0, noise_scale, size=processed.shape).astype(np.float32)
-        processed += grain * skin[:, :, None]
+        # noise_mask = processing (already excludes hair) intersected with inverse of
+        # protected (excludes lips, eyes, teeth) — background is zero by construction.
+        noise_mask = np.clip(processing * (1.0 - np.clip(protected, 0.0, 1.0)), 0.0, 1.0)
+        processed += grain * noise_mask[:, :, None]
 
-    blend = np.clip(skin * (0.70 + 0.30 * strength), 0.0, 1.0)
+    # Exclude hair from the final blend so hair pixels are taken from the original image
+    blend = np.clip((skin - hair_excl * 0.85) * (0.70 + 0.30 * strength), 0.0, 1.0)
     if preserve_edges:
         blend *= 1.0 - protected * 0.68
     out = image.astype(np.float32) * (1.0 - blend[:, :, None]) + processed * blend[:, :, None]
@@ -941,6 +1039,16 @@ def _frequency_age_pipeline(
         "maskMethod": masks["maskMethod"],
         "skinHighFrequencyEnergy": round(_masked_high_frequency_energy(np.clip(out, 0, 255).astype(np.uint8), masks["skinMask"]), 4),
     }
+    if save_debug:
+        def _mask_b64(m: np.ndarray) -> str:
+            vis = np.clip(m * 255.0, 0, 255).astype(np.uint8)
+            return _encode_base64_jpeg(cv2.cvtColor(vis, cv2.COLOR_GRAY2BGR), quality=88)
+        meta["debugMasks"] = {
+            "skin":       _mask_b64(masks["skinMask"].astype(np.float32)),
+            "processing": _mask_b64(processing),
+            "protected":  _mask_b64(protected),
+            "hair":       _mask_b64(hair_excl),
+        }
     return np.clip(out, 0, 255).astype(np.uint8), meta
 
 
@@ -1252,6 +1360,184 @@ def _extract_landmarks_for_warp(image: np.ndarray):
     return pts, _MP68_GROUPS
 
 
+def _get_68_pts_for_warp(image: np.ndarray) -> tuple[np.ndarray, str]:
+    """
+    Return (pts68 [68,2] float32, method_str) for expression warping.
+    Priority: MediaPipe 468→68 reduction > Dlib 68-point > synthetic fallback.
+    Always returns exactly 68 landmarks.
+    """
+    h, w = image.shape[:2]
+
+    # 1. MediaPipe (best accuracy)
+    if FACE_MESH is not None:
+        mp_points = _get_mediapipe_points(image)
+        if len(mp_points) >= 468:
+            reduced = _reduce_mediapipe_to_68(mp_points)
+            if len(reduced) == 68:
+                pts = np.array([[float(p["x"]), float(p["y"])] for p in reduced],
+                               dtype=np.float32)
+                return pts, "mediapipe"
+
+    # 2. Dlib (if model file is present)
+    dlib_pts = _get_dlib_landmarks(image)
+    if len(dlib_pts) == 68:
+        pts = np.array([[float(x), float(y)] for x, y in dlib_pts], dtype=np.float32)
+        return pts, "dlib"
+
+    # 3. Synthetic 68-point fallback from Haar/skin bbox
+    det = _detect_face_bbox(image)
+    if det is None:
+        bx, by, bw, bh = int(w * 0.18), int(h * 0.12), int(w * 0.64), int(h * 0.76)
+    else:
+        bx, by, bw, bh, _ = det
+    pts68 = _synthetic_68_landmarks_from_bbox(bx, by, bw, bh, w, h)
+    pts = np.array([[float(x), float(y)] for x, y in pts68], dtype=np.float32)
+    return pts, "fallback"
+
+
+def _build_dst_68_direct(
+    src68: np.ndarray,
+    smile: float,
+    brow: float,
+    lip: float,
+    slim: float,
+) -> tuple[np.ndarray, int, float, list]:
+    """
+    Build displaced 68-pt destination landmarks using *direct* per-point
+    rules.  Only the explicitly listed points are moved; everything else is
+    left unchanged (no Gaussian propagation, no falloff).
+
+    68-point index conventions (dlib / standard):
+      0-16  : jawline       (slim)
+      17-21 : left brow     (brow)
+      22-26 : right brow    (brow)
+      27-35 : nose bridge + tip
+      36-41 : left eye
+      42-47 : right eye
+      48    : left mouth corner  (smile x, lip x)
+      54    : right mouth corner (smile x, lip x)
+      48-67 : full mouth ring
+    """
+    dst = src68.copy()
+    h_dim, w_dim = float(np.max(src68[:, 1])), float(np.max(src68[:, 0]))
+
+    min_x = float(np.min(src68[:, 0]))
+    max_x = float(np.max(src68[:, 0]))
+    min_y = float(np.min(src68[:, 1]))
+    max_y = float(np.max(src68[:, 1]))
+    face_w = max(max_x - min_x, 1.0)
+    face_h = max(max_y - min_y, 1.0)
+
+    # Nose bridge centre — used as slim reference
+    # Points 27-30 = nose bridge in dlib 68; take x mean as center_x.
+    bridge_idxs = [i for i in range(27, 31) if i < len(src68)]
+    center_x = float(np.mean(src68[bridge_idxs, 0])) if bridge_idxs else (min_x + face_w / 2)
+
+    moved_mask = np.zeros(len(src68), dtype=bool)
+
+    # ── SMILE ────────────────────────────────────────────────────────────
+    # Corners 48 (left) + 54 (right) get full displacement.
+    # Adjacent lip ring points get proportional motion to prevent mesh tearing.
+    if abs(smile) > 1e-4 and len(src68) > 54:
+        dx_c = 0.050 * face_w * smile   # horizontal: corners move outward
+        dy_c = 0.060 * face_h * smile   # vertical:   corners move upward
+
+        dst[48, 0] -= dx_c
+        dst[48, 1] -= dy_c
+        dst[54, 0] += dx_c
+        dst[54, 1] -= dy_c
+        moved_mask[[48, 54]] = True
+
+        # Left neighbours: 45% close, 20% far
+        for i, w in [(49, 0.45), (59, 0.45), (60, 0.45),
+                     (50, 0.20), (58, 0.20), (61, 0.20), (67, 0.20)]:
+            if i < len(src68):
+                dst[i, 0] -= dx_c * w
+                dst[i, 1] -= dy_c * w
+                moved_mask[i] = True
+        # Right neighbours: 45% close, 20% far
+        for i, w in [(55, 0.45), (65, 0.45),
+                     (56, 0.20), (64, 0.20), (62, 0.20)]:
+            if i < len(src68):
+                dst[i, 0] += dx_c * w
+                dst[i, 1] -= dy_c * w
+                moved_mask[i] = True
+
+    # ── BROW RAISE ───────────────────────────────────────────────────────
+    # Move brow points 17-26 upward. Upper eyelid points follow at 40%/20%
+    # to prevent unnatural skin stretching between brow and eye.
+    if abs(brow) > 1e-4 and len(src68) > 46:
+        brow_dy = 0.090 * face_h * brow
+        brow_idxs = list(range(17, 27))
+        for i in brow_idxs:
+            dst[i, 1] -= brow_dy
+        moved_mask[brow_idxs] = True
+        # Upper eyelid follow-through: 40% close, 20% far
+        for i, w in [(37, 0.40), (38, 0.40), (43, 0.40), (44, 0.40)]:
+            if i < len(src68):
+                dst[i, 1] -= brow_dy * w
+                moved_mask[i] = True
+        for i, w in [(36, 0.20), (39, 0.20), (42, 0.20), (45, 0.20)]:
+            if i < len(src68):
+                dst[i, 1] -= brow_dy * w
+                moved_mask[i] = True
+
+    # ── LIP WIDENING ─────────────────────────────────────────────────────
+    # Corners 48 / 54 move outward; same neighbour distribution as smile,
+    # horizontal axis only.
+    if abs(lip) > 1e-4 and len(src68) > 54:
+        dx_l = 0.080 * face_w * lip   # corners outward
+        dy_l = 0.030 * face_h * lip   # slight vertical separation (upper up, lower down)
+        dst[48, 0] -= dx_l
+        dst[54, 0] += dx_l
+        moved_mask[[48, 54]] = True
+        # Left-side neighbours — horizontal spread
+        for i, w in [(49, 0.50), (59, 0.50), (60, 0.50),
+                     (50, 0.25), (58, 0.25), (61, 0.25), (67, 0.25)]:
+            if i < len(src68):
+                dst[i, 0] -= dx_l * w
+                moved_mask[i] = True
+        # Right-side neighbours — horizontal spread
+        for i, w in [(55, 0.50), (65, 0.50),
+                     (56, 0.25), (64, 0.25), (62, 0.25)]:
+            if i < len(src68):
+                dst[i, 0] += dx_l * w
+                moved_mask[i] = True
+        # Vertical separation: upper lip up, lower lip down
+        for i in [48, 49, 50, 54, 55, 56]:   # upper lip outline
+            if i < len(src68):
+                dst[i, 1] -= dy_l
+        for i in [58, 59, 60, 61, 62, 64, 65, 67]:  # lower lip outline
+            if i < len(src68):
+                dst[i, 1] += dy_l
+
+    # ── FACE SLIM ────────────────────────────────────────────────────────
+    # Move ONLY jawline points 0-16 toward center_x.
+    if abs(slim) > 1e-4 and len(src68) > 16:
+        jaw_idxs = list(range(17))
+        for i in jaw_idxs:
+            dst[i, 0] += (center_x - src68[i, 0]) * 0.130 * slim
+        moved_mask[jaw_idxs] = True
+
+    # ── Hard displacement clamp: <= 12% of face_size ─────────────────────
+    face_size = max(face_w, face_h)
+    max_allowed = 0.12 * face_size
+    disp_raw = dst - src68
+    norms = np.linalg.norm(disp_raw, axis=1, keepdims=True)
+    overflow = (norms > max_allowed) & (norms > 0)
+    if np.any(overflow):
+        scale = np.where(overflow, max_allowed / norms, 1.0)
+        dst = src68 + disp_raw * scale
+
+    # Measure how many points actually moved and max displacement
+    disp = np.linalg.norm(dst - src68, axis=1)
+    moved_count = int(np.sum(disp > 0.3))
+    max_disp = float(np.max(disp)) if moved_count > 0 else 0.0
+    moved_indices = [int(i) for i in np.where(moved_mask)[0]]
+
+    return dst, moved_count, max_disp, moved_indices
+
+
 # ── Muscle-based dense flow-field engine (v3) ────────────────────────────────
 
 def _group_centroid(src_pts: np.ndarray, groups: dict, *keys) -> np.ndarray | None:
@@ -1536,26 +1822,42 @@ def _build_dst_landmarks_v2(
         )
         # Per-point inward pull scaled by distance from centre; use add_disp so
         # Gaussian falloff propagates the displacement to neighbouring skin points.
+        # sigma = 0.060 * ref  (tight radius — falloff to near-zero within ~80 px,
+        # preventing the cumulative effect of 18 jaw points from reaching the nose).
         max_pull = 0.13 * face_w
+        sigma = 0.060 * ref
         for side_key in ("jaw_left", "jaw_right"):
             for i in groups.get(side_key, []):
                 if 0 <= i < len(src_points):
                     raw_pull = (ctr_x - src_points[i, 0]) * sl * 0.20
                     pull_x = float(np.clip(raw_pull, -max_pull, max_pull))
-                    # Inject a tiny point displacement then spread with falloff
-                    sigma = 0.10 * ref
                     w_arr = _falloff_weights(src_points, [i], sigma)
                     displacements[:, 0] += pull_x * w_arr
         # Chin: very subtle upward tuck (avoid an excessively sharp chin)
         chin_pull = sl * 0.010 * face_h
-        chin_sigma = 0.08 * ref
+        chin_sigma = 0.055 * ref
         chin_idxs = [i for i in groups.get("chin", []) if 0 <= i < len(src_points)]
         if chin_idxs:
             w_arr_chin = _falloff_weights(src_points, chin_idxs, chin_sigma)
             displacements[:, 1] -= chin_pull * w_arr_chin
 
-    # Global displacement clamp (prevents wild deformation at slider extremes)
-    max_disp = 0.15 * ref
+        # Hard-zero identity regions so slim NEVER moves the nose, eyes, or mouth
+        # even when multiple jaw points contribute small falloff values that add up.
+        identity_keys = (
+            "nose_tip", "center",
+            "lower_eye_left", "lower_eye_right",
+            "upper_eyelid_left", "upper_eyelid_right",
+            "inner_upper", "inner_lower",
+            "upper_lip", "lower_lip",
+            "brow_left", "brow_right",
+        )
+        for key in identity_keys:
+            for i in groups.get(key, []):
+                if 0 <= i < len(src_points):
+                    displacements[i] = 0.0
+
+    # Global displacement clamp — 12 % cap keeps deformation in natural range
+    max_disp = 0.12 * ref
     disp_mag = np.linalg.norm(displacements, axis=1, keepdims=True)
     scale = np.where(disp_mag > max_disp, max_disp / (disp_mag + 1e-8), 1.0)
     displacements *= scale
@@ -1568,23 +1870,105 @@ def _build_dst_landmarks_v2(
 
 # ── Delaunay triangulation helpers ──────────────────────────────────────────
 
+def _hull_fence_points(src_pts: np.ndarray, n: int = 60) -> np.ndarray:
+    """
+    Return N equally arc-length-spaced points along the convex hull perimeter
+    of src_pts.  These points are added at IDENTICAL positions to both
+    src_full and dst_full, creating a rigid "fence" around the face boundary.
+
+    Effect: Delaunay triangles inside the face can only connect face landmarks
+    to each other or to fence points — never directly to the oval/border ring.
+    This prevents background pixels leaking into face-interior triangles when
+    the jaw is slimmed inward, eliminating the blue-stripe artifact.
+    """
+    hull = cv2.convexHull(src_pts.astype(np.float32))  # (k, 1, 2)
+    hull = hull[:, 0, :]                                 # (k, 2)
+    hull_closed = np.vstack([hull, hull[:1]])            # close the loop
+
+    diffs   = np.diff(hull_closed, axis=0)               # (k, 2) edge vectors
+    seg_len = np.linalg.norm(diffs, axis=1)              # edge lengths
+    cum_len = np.concatenate([[0.0], np.cumsum(seg_len)])
+    total   = cum_len[-1]
+    if total < 1.0:
+        return hull
+
+    targets = np.linspace(0.0, total, n, endpoint=False)
+    pts: list = []
+    for t in targets:
+        idx = int(np.searchsorted(cum_len, t, side='right')) - 1
+        idx = min(idx, len(hull_closed) - 2)
+        seg_t = (t - cum_len[idx]) / (seg_len[idx] + 1e-9)
+        pts.append(hull_closed[idx] + seg_t * diffs[idx])
+    return np.array(pts, dtype=np.float32)
+
+
 def _add_boundary_points(points: np.ndarray, w: int, h: int) -> np.ndarray:
-    """Dense border ring so the Delaunay mesh covers the full canvas without gaps."""
-    n = 8  # points per border edge
-    xs = np.linspace(0, w - 1, n)
-    ys = np.linspace(0, h - 1, n)
+    """
+    Return a merged point set of face landmarks + stable anchors.
+
+    Two rings of anchors are added so the Delaunay mesh covers the full canvas
+    without degenerate boundary triangles:
+
+    1. Image-border ring — 16 points per edge (64 total), clamped 1 px inside
+       the canvas so cv2.Subdiv2D never raises an out-of-bounds error.
+    2. Mid-frame oval ring — 24 points on an ellipse centred on the face
+       bounding box, placed between the face landmarks and the image border.
+       These prevent very large, floppy triangles from spanning the whole frame
+       when the face is small relative to the image.
+
+    Anchors appear at identical positions in *both* the source and destination
+    point sets, so they produce identity triangles outside the face region and
+    the background never moves.
+    """
+    n_edge = 16           # border ring: points per edge
+    n_oval = 24           # mid-frame oval: total points
+
+    # —— Image border ring ——
+    margin = 1            # 1-px inset so all points are strictly inside (0, w) x (0, h)
+    xs = np.linspace(margin, w - 1 - margin, n_edge)
+    ys = np.linspace(margin, h - 1 - margin, n_edge)
     bnd: list = []
     for x in xs:
-        bnd.append([x, 0])
-        bnd.append([x, h - 1])
+        bnd.append([float(x), float(margin)])
+        bnd.append([float(x), float(h - 1 - margin)])
     for y in ys[1:-1]:
-        bnd.append([0, y])
-        bnd.append([w - 1, y])
+        bnd.append([float(margin), float(y)])
+        bnd.append([float(w - 1 - margin), float(y)])
+
+    # —— Mid-frame oval ring ——
+    if len(points) >= 4:
+        cx = float(np.mean(points[:, 0]))
+        cy = float(np.mean(points[:, 1]))
+        # Oval radii ≈ midpoint between face extent and canvas edge
+        rx = max(float(np.max(points[:, 0]) - np.min(points[:, 0])) * 0.78,
+                 min(cx, w - cx) * 0.60)
+        ry = max(float(np.max(points[:, 1]) - np.min(points[:, 1])) * 0.78,
+                 min(cy, h - cy) * 0.60)
+    else:
+        cx, cy = w / 2.0, h / 2.0
+        rx, ry = w * 0.40, h * 0.40
+    for i in range(n_oval):
+        angle = 2.0 * np.pi * i / n_oval
+        ox = float(np.clip(cx + rx * np.cos(angle), margin, w - 1 - margin))
+        oy = float(np.clip(cy + ry * np.sin(angle), margin, h - 1 - margin))
+        bnd.append([ox, oy])
+
     return np.vstack([points, np.array(bnd, dtype=np.float32)])
 
 
 def _triangle_indices_from_subdiv(points: np.ndarray, w: int, h: int) -> list:
-    """Compute Delaunay triangles; return list of (i, j, k) index triples."""
+    """
+    Compute Delaunay triangles and return valid (i, j, k) index triples.
+
+    Triangles are rejected when they are:
+    - degenerate  (any vertex maps to None)
+    - duplicate   (same index triple already seen)
+    - tiny        (area < 2 px²)
+    - extreme aspect ratio  (longest edge > 8 × shortest edge)
+    - oversized   (any edge longer than 55 % of the larger image dimension,
+                   which catches huge background triangles that should not
+                   be warped and that would otherwise cause visible tearing)
+    """
     subdiv = cv2.Subdiv2D((0, 0, w, h))
     pts_int = [
         (max(0, min(w - 1, int(round(float(p[0]))))),
@@ -1605,6 +1989,7 @@ def _triangle_indices_from_subdiv(points: np.ndarray, w: int, h: int) -> list:
         return []
 
     pts_arr = np.array(points, dtype=np.float32)
+    max_edge_len = max(w, h) * 0.55   # reject triangles spanning more than 55 % of the frame
 
     def idx_of(px: float, py: float):
         key = (int(round(px)), int(round(py)))
@@ -1633,6 +2018,25 @@ def _triangle_indices_from_subdiv(points: np.ndarray, w: int, h: int) -> list:
         key = tuple(sorted((i1, i2, i3)))
         if key in seen:
             continue
+
+        # —— Geometric quality filters ——
+        verts = np.array([[x1, y1], [x2, y2], [x3, y3]], dtype=np.float32)
+        area = abs(_triangle_area(verts))
+        if area < 2.0:
+            continue
+        # Edge lengths
+        e0 = float(np.linalg.norm(verts[1] - verts[0]))
+        e1 = float(np.linalg.norm(verts[2] - verts[1]))
+        e2 = float(np.linalg.norm(verts[0] - verts[2]))
+        longest  = max(e0, e1, e2)
+        shortest = min(e0, e1, e2)
+        # Reject triangles that span too large a region (background / border artefacts)
+        if longest > max_edge_len:
+            continue
+        # Reject degenerate slivers: aspect ratio > 8:1
+        if shortest < 1e-3 or longest / shortest > 8.0:
+            continue
+
         seen.add(key)
         tris.append(key)
     return tris
@@ -1654,13 +2058,33 @@ def _warp_triangle(
     *,
     interp: int = cv2.INTER_CUBIC,
 ) -> None:
-    """Affine-warp one Delaunay triangle from src into dst with feathered mask."""
+    """
+    Affine-warp one Delaunay triangle from src into dst with a feathered alpha mask.
+
+    Rejection criteria (applied in order, cheapest first):
+    - Bounding rect width or height is zero.
+    - Source or destination area < 4 px² (degenerate / sub-pixel triangle).
+    - Area ratio dst/src > 5 or src/dst > 5 (extreme compression / expansion).
+    - Longest edge of destination triangle > 8 × shortest edge (degenerate sliver).
+
+    Feathering radius scales with triangle size so small triangles get a tight
+    1-px blur while large triangles get a slightly wider feather, keeping seams
+    invisible at all scales.
+    """
     area_src = abs(_triangle_area(t_src))
     area_dst = abs(_triangle_area(t_dst))
-    # Skip degenerate, tiny, or badly distorted triangles
     if area_src < 4.0 or area_dst < 4.0:
         return
-    if area_src > 0 and area_dst / area_src > 5.0:
+    if area_src > 0 and (area_dst / area_src > 5.0 or area_src / area_dst > 5.0):
+        return
+
+    # Aspect-ratio guard on destination triangle
+    e0 = float(np.linalg.norm(t_dst[1] - t_dst[0]))
+    e1 = float(np.linalg.norm(t_dst[2] - t_dst[1]))
+    e2 = float(np.linalg.norm(t_dst[0] - t_dst[2]))
+    longest  = max(e0, e1, e2)
+    shortest = min(e0, e1, e2)
+    if shortest < 1e-3 or longest / shortest > 8.0:
         return
 
     r1 = cv2.boundingRect(np.float32([t_src]))
@@ -1671,11 +2095,16 @@ def _warp_triangle(
     t1_rect = np.float32([[t_src[i][0] - r1[0], t_src[i][1] - r1[1]] for i in range(3)])
     t2_rect = np.float32([[t_dst[i][0] - r2[0], t_dst[i][1] - r2[1]] for i in range(3)])
 
-    # Anti-aliased fill mask, then 1-pixel feather to reduce seams
+    # Feather radius: 1 px for tiny triangles, up to 3 px for large ones.
+    # Using an odd kernel so GaussianBlur sigma is well-defined.
+    tri_side = max(r2[2], r2[3])
+    feather_r = 1 if tri_side < 20 else (2 if tri_side < 60 else 3)
+    feather_k = feather_r * 2 + 1   # always odd: 3, 5, or 7
+    feather_sigma = 0.5 + feather_r * 0.4
+
     mask = np.zeros((r2[3], r2[2]), dtype=np.float32)
     cv2.fillConvexPoly(mask, np.int32(t2_rect), 1.0, lineType=cv2.LINE_AA)
-    if mask.shape[0] > 4 and mask.shape[1] > 4:
-        mask = cv2.GaussianBlur(mask, (3, 3), 0.6)
+    mask = cv2.GaussianBlur(mask, (feather_k, feather_k), feather_sigma)
 
     src_patch = src[r1[1]:r1[1] + r1[3], r1[0]:r1[0] + r1[2]]
     if src_patch.size == 0:
@@ -1700,11 +2129,14 @@ def _warp_triangle(
 
 # ── Thin Plate Spline (TPS) warping ─────────────────────────────────────────
 
-def _tps_build(dst_ctrl: np.ndarray, src_ctrl: np.ndarray):
+def _tps_build(dst_ctrl: np.ndarray, src_ctrl: np.ndarray, lam: float = 1e-3):
     """
     Solve TPS coefficients for the inverse mapping (dst → src), so that
     cv2.remap can sample source pixels for every destination pixel.
-    Returns (W, A, ctrl) or None on failure.
+
+    ``lam`` is the Tikhonov regularisation strength.  Larger values produce
+    smoother (less over-fitted) warps; 1e-3 is a good default for facial
+    expression work.  Returns (W, A, ctrl) or None on failure.
     """
     n = len(dst_ctrl)
     if n < 4:
@@ -1712,18 +2144,17 @@ def _tps_build(dst_ctrl: np.ndarray, src_ctrl: np.ndarray):
     ctrl = dst_ctrl.astype(np.float64)
     out  = src_ctrl.astype(np.float64)
 
-    # TPS kernel matrix K
-    K = np.zeros((n, n), np.float64)
-    for i in range(n):
-        for j in range(n):
-            if i != j:
-                r2 = float(np.sum((ctrl[i] - ctrl[j]) ** 2))
-                K[i, j] = r2 * np.log(max(r2, 1e-14))
+    # TPS kernel matrix K — U(r) = r² log r²
+    ctrl_sq = np.sum(ctrl ** 2, axis=1)
+    r2 = ctrl_sq[:, None] + ctrl_sq[None, :] - 2.0 * (ctrl @ ctrl.T)  # (n,n)
+    np.fill_diagonal(r2, 0.0)
+    with np.errstate(divide='ignore', invalid='ignore'):
+        K = np.where(r2 > 0, r2 * np.log(np.maximum(r2, 1e-14)), 0.0)
 
     P = np.column_stack([np.ones(n), ctrl])          # (n, 3)
     Z = np.zeros((3, 3), np.float64)
     L = np.block([[K, P], [P.T, Z]])                 # (n+3, n+3)
-    L[:n, :n] += np.eye(n) * 1e-4                   # regularisation
+    L[:n, :n] += np.eye(n) * lam                    # Tikhonov regularisation
 
     rhs_x = np.concatenate([out[:, 0], np.zeros(3)])
     rhs_y = np.concatenate([out[:, 1], np.zeros(3)])
@@ -1752,16 +2183,27 @@ def _tps_eval(W: np.ndarray, A: np.ndarray, ctrl: np.ndarray,
     return (K @ W + P @ A).astype(np.float32)
 
 
-def _tps_remap(image: np.ndarray, src_ctrl: np.ndarray, dst_ctrl: np.ndarray,
-               subsample: int = 4) -> np.ndarray:
+def _tps_remap(
+    image: np.ndarray,
+    src_ctrl: np.ndarray,
+    dst_ctrl: np.ndarray,
+    subsample: int = 4,
+    lam: float = 1e-3,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
     """
     Warp image using TPS.  Evaluates the dense inverse field on a coarser grid
     then bicubically upsamples it before calling cv2.remap.
+
+    Returns (warped_image, map_x, map_y) so the caller can post-process the
+    displacement maps (e.g. with _lock_identity_regions) before committing.
     """
     h, w = image.shape[:2]
-    result = _tps_build(dst_ctrl, src_ctrl)
+    result = _tps_build(dst_ctrl, src_ctrl, lam=lam)
     if result is None:
-        return image.copy()
+        xs = np.arange(w, dtype=np.float32)
+        ys = np.arange(h, dtype=np.float32)
+        id_x, id_y = np.meshgrid(xs, ys)
+        return image.copy(), id_x, id_y
     W, A, ctrl = result
 
     ys = np.arange(0, h, subsample, dtype=np.float64)
@@ -1776,12 +2218,51 @@ def _tps_remap(image: np.ndarray, src_ctrl: np.ndarray, dst_ctrl: np.ndarray,
     map_x = cv2.resize(map_x_s, (w, h), interpolation=cv2.INTER_CUBIC)
     map_y = cv2.resize(map_y_s, (w, h), interpolation=cv2.INTER_CUBIC)
 
-    return cv2.remap(image, map_x, map_y,
-                     interpolation=cv2.INTER_CUBIC,
-                     borderMode=cv2.BORDER_REFLECT_101)
+    warped = cv2.remap(image, map_x, map_y,
+                       interpolation=cv2.INTER_CUBIC,
+                       borderMode=cv2.BORDER_REFLECT_101)
+    return warped, map_x, map_y
 
 
-# ── Main expression warp orchestrator (v3) ────────────────────────────────────
+# ── Main expression warp orchestrator ────────────────────────────────────────
+
+
+def _blend_warped_face_mask(
+    original: np.ndarray,
+    warped: np.ndarray,
+    src_pts: np.ndarray,
+    w: int,
+    h: int,
+) -> np.ndarray:
+    """
+    Blend the warped face back onto the original using a Gaussian-feathered
+    convex hull face mask.  Hair, neck, and background come from the unmodified
+    original; only the face interior receives the warp result.
+    """
+    hull = cv2.convexHull(src_pts.astype(np.int32))
+    face_mask = np.zeros((h, w), dtype=np.uint8)
+    cv2.fillConvexPoly(face_mask, hull, 255, lineType=cv2.LINE_AA)
+
+    # Slight erosion prevents hard blending artefacts at the convex hull edge
+    erode_r = max(3, min(w, h) // 55)
+    erode_k = _odd_kernel(erode_r)
+    erode_kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (erode_k, erode_k))
+    face_mask = cv2.erode(face_mask, erode_kernel, iterations=2)
+
+    # Gaussian feathering — radius ≈ 4 % of the shorter image dimension
+    feather_r = max(15, min(w, h) // 25)
+    feather_k = _odd_kernel(feather_r)
+    alpha = cv2.GaussianBlur(
+        face_mask.astype(np.float32) / 255.0, (feather_k, feather_k), 0
+    )
+    alpha = np.clip(alpha, 0.0, 1.0)[:, :, None]
+
+    result = (
+        original.astype(np.float32) * (1.0 - alpha)
+        + warped.astype(np.float32) * alpha
+    )
+    return np.clip(result, 0, 255).astype(np.uint8)
+
 
 def _apply_expression_warp(
     image: np.ndarray,
@@ -1789,83 +2270,151 @@ def _apply_expression_warp(
     brow: float,
     lip: float,
     slim: float,
-    warp_mode: str = "flow",   # parameter kept for API compatibility
+    warp_mode: str = "delaunay",
     save_debug: bool = False,
+    interp: int = cv2.INTER_CUBIC,
 ) -> tuple:
     """
-    Muscle-based dense flow-field expression warping.
+    Anatomical Delaunay expression warp using MediaPipe 468-point mesh.
 
     Pipeline:
-      1. Build per-pixel inverse displacement field from anatomical muscle forces.
-      2. Lock identity-critical regions (nose tip, eye centres).
-      3. Smooth with a wide Gaussian — eliminates all spatial discontinuities.
-      4. Clamp extreme displacements.
-      5. Apply via cv2.remap — no triangle seams, no alpha blending.
+      1. Extract full 468-pt MediaPipe landmarks with anatomical group definitions
+         (jaw, eyebrows, eyes, nose, mouth, cheeks, forehead).  Synthetic 68-pt
+         fallback used when MediaPipe is unavailable.
+      2. Displace only expression-relevant landmark groups using Gaussian falloff.
+         Cheek support points are included for smile so the mouth region does not
+         look detached.  Identity anchors (nose tip, inner eye corners) are not moved.
+      3. Dense boundary anchors added at identical src & dst positions — background
+         stays completely still.
+      4. Delaunay triangulate the full landmark + boundary set.
+      5. Affine-warp each triangle via cv2.getAffineTransform + cv2.warpAffine.
+      6. Blend back using a Gaussian-feathered convex hull face mask so hair,
+         neck, and background come from the unmodified original.
+
+    Returns (result, debug_paths, used_lm_count, moved_pts, max_disp, tri_count).
     """
     h, w = image.shape[:2]
+    if abs(smile) < 1e-4 and abs(brow) < 1e-4 and abs(lip) < 1e-4 and abs(slim) < 1e-4:
+        return image.copy(), {}, 0, 0, 0.0, 0, "none"
 
-    if smile == 0.0 and brow == 0.0 and lip == 0.0 and slim == 0.0:
-        return image.copy(), {}
-
+    # 1. Anatomical landmark extraction: full 468-pt MediaPipe mesh with group defs
+    #    (or synthetic 68-pt fallback with matching group defs when MP unavailable).
+    #    _extract_landmarks_for_warp is always used — _get_68_pts_for_warp is NOT used
+    #    here; it is only used by the expression-transfer endpoint.
     src_pts, groups = _extract_landmarks_for_warp(image)
+    n_lm = len(src_pts)
+    # Determine source for debug / response field
+    lm_source = "mediapipe468" if n_lm >= 468 else "fallback68"
 
-    # 1. Muscle-driven dense flow field
-    flow = _build_muscle_flow(h, w, src_pts, groups, smile, brow, lip, slim)
+    # 2. Build displaced destinations via per-group Gaussian falloff.
+    #    Only expression-relevant groups move; identity anchors stay fixed.
+    dst_pts = _build_dst_landmarks_v2(src_pts, groups, smile, brow, lip, slim, w, h)
 
-    # 2. Identity preservation
-    flow = _lock_identity_regions(flow, src_pts, groups)
+    # 3. Per-point displacement stats used by response fields and debug output
+    disp = np.linalg.norm(dst_pts - src_pts, axis=1)
+    moved_pts = int(np.sum(disp > 0.3))
+    max_disp = float(np.max(disp)) if moved_pts > 0 else 0.0
+    moved_indices = [int(i) for i in np.where(disp > 0.3)[0]]
 
-    # 2.5 Hull masking — zero the flow outside the face convex hull so that
-    # background pixels keep zero displacement (no background colour bleed).
-    hull_pts_warp = cv2.convexHull(src_pts.astype(np.int32))
-    hull_f = np.zeros((h, w), dtype=np.float32)
-    cv2.fillConvexPoly(hull_f, hull_pts_warp, 1.0)
-    kh = max(21, int(min(h, w) * 0.07)) | 1
-    hull_f = cv2.GaussianBlur(hull_f, (kh, kh), kh * 0.35)
-    flow[:, :, 0] *= hull_f
-    flow[:, :, 1] *= hull_f
-
-    # 3. Localised Gaussian smoothing — smooths the sharp Gaussian edges at
-    #    landmark boundaries without spreading into adjacent regions.
-    #    ~5% of image size keeps effects visible but still locally confined.
-    ksize = max(17, int(min(h, w) * 0.05)) | 1
-    sigma = float(ksize) * 0.42
-    flow[:, :, 0] = cv2.GaussianBlur(flow[:, :, 0], (ksize, ksize), sigma)
-    flow[:, :, 1] = cv2.GaussianBlur(flow[:, :, 1], (ksize, ksize), sigma)
-
-    # 4. Anti-artifact displacement clamp
-    mag = np.hypot(flow[:, :, 0], flow[:, :, 1])
-    max_disp = min(h, w) * 0.13
-    over = mag > max_disp
-    if over.any():
-        scale = np.where(over, max_disp / (mag + 1e-8), 1.0)
-        flow[:, :, 0] *= scale
-        flow[:, :, 1] *= scale
-
-    # 5. Inverse remap: dst(x, y) ← src(x + flow_x, y + flow_y)
-    yy, xx = np.mgrid[:h, :w].astype(np.float32)
-    map_x = np.clip(xx + flow[:, :, 0], 0.0, w - 1.0)
-    map_y = np.clip(yy + flow[:, :, 1], 0.0, h - 1.0)
-    result = cv2.remap(
-        image, map_x, map_y,
-        interpolation=cv2.INTER_CUBIC,
-        borderMode=cv2.BORDER_REFLECT_101,
-    )
+    # 4. Face-hull fence + outer boundary anchors.
+    #
+    #    The fence is a dense ring of points sampled along the convex hull of
+    #    src_pts.  Added at IDENTICAL positions to both src_full and dst_full
+    #    (identity = no warping) it acts as a rigid barrier:
+    #       - Inside fence  → triangles only connect face landmarks; background
+    #                         pixels can never leak into face-interior triangles.
+    #       - Outside fence → identity triangles; background stays perfectly still.
+    #    Without this fence, Delaunay creates large triangles from the slimmed
+    #    jaw all the way to the oval/border anchors; those triangles sample the
+    #    exposed background gap and produce the blue-stripe artefact on the cheeks.
+    fence = _hull_fence_points(src_pts, n=60)   # same coords in src and dst
+    src_full = _add_boundary_points(np.vstack([src_pts, fence]), w, h)
+    dst_full = _add_boundary_points(np.vstack([dst_pts, fence]), w, h)
 
     debug_paths: dict = {}
+
+    if warp_mode == "tps":
+        try:
+            # Use boundary-anchored control sets (src_full / dst_full) so the
+            # background anchor points keep the warp to zero outside the face.
+            warped, tps_map_x, tps_map_y = _tps_remap(
+                image, src_full, dst_full, subsample=4, lam=1e-3
+            )
+
+            # Apply identity lock: suppress displacement near nose tip & eye
+            # centres so those landmarks stay perfectly stable even under TPS.
+            _img_h, _img_w = image.shape[:2]
+            _xs = np.arange(_img_w, dtype=np.float32)
+            _ys = np.arange(_img_h, dtype=np.float32)
+            _XX, _YY = np.meshgrid(_xs, _ys)
+            flow = np.stack([tps_map_x - _XX, tps_map_y - _YY], axis=2)
+            flow = _lock_identity_regions(flow, src_pts, groups)
+            tps_map_x = _XX + flow[:, :, 0]
+            tps_map_y = _YY + flow[:, :, 1]
+            warped = cv2.remap(image, tps_map_x, tps_map_y,
+                               interpolation=cv2.INTER_CUBIC,
+                               borderMode=cv2.BORDER_REFLECT_101)
+
+            mse = float(np.mean((warped.astype(np.float32) - image.astype(np.float32)) ** 2))
+            if mse > 3000.0:
+                raise ValueError(f"TPS MSE too high ({mse:.0f})")
+        except Exception:
+            warp_mode = "delaunay"
+
+    if warp_mode != "tps":
+        # 5. Delaunay triangulation on full landmark + boundary set
+        tris = _triangle_indices_from_subdiv(src_full, w, h)
+        tri_count = len(tris)
+
+        # 6. Affine-warp each triangle (cv2.getAffineTransform + cv2.warpAffine)
+        src_f32 = image.astype(np.float32)
+        warped_f32 = src_f32.copy()
+        for (i, j, k) in tris:
+            t_src = np.array([src_full[i], src_full[j], src_full[k]], dtype=np.float32)
+            t_dst = np.array([dst_full[i], dst_full[j], dst_full[k]], dtype=np.float32)
+            _warp_triangle(src_f32, warped_f32, t_src, t_dst, interp=interp)
+        warped = np.clip(warped_f32, 0, 255).astype(np.uint8)
+    else:
+        tri_count = 0
+
+    # 7. Blend warped face back via Gaussian-feathered convex hull mask.
+    #    We use dst_pts (the moved/slimmed landmarks) for the hull so that the
+    #    convex hull follows the NEW face boundary rather than the original one.
+    #    This prevents stretched boundary triangles from sampling the background
+    #    (e.g. a solid-blue studio background) and projecting those pixels back
+    #    into the face area as coloured stripes or grid artefacts.
+    #    Outside the dst-hull the original image shows through, which for any
+    #    background is exactly the correct content.
+    result = _blend_warped_face_mask(image, warped, dst_pts, w, h)
+
     if save_debug:
-        mag_u8  = cv2.normalize(mag, None, 0, 255, cv2.NORM_MINMAX).astype(np.uint8)
-        mag_vis = cv2.applyColorMap(mag_u8, cv2.COLORMAP_JET)
-        debug_paths["flow_magnitude"] = _save_image(mag_vis, "debug_flow_magnitude")
-        vis_lm = image.copy()
-        for pt in src_pts:
-            cv2.circle(vis_lm, (int(pt[0]), int(pt[1])), 2, (0, 255, 0), -1)
-        debug_paths["landmarks"] = _save_image(vis_lm, "debug_landmarks")
+        moved_set = set(moved_indices)
+        vis_src = image.copy()
+        for i, pt in enumerate(src_pts):
+            colour = (0, 0, 255) if i in moved_set else (0, 255, 0)
+            cv2.circle(vis_src, (int(pt[0]), int(pt[1])), 2, colour, -1)
+        debug_paths["source_landmarks"] = _save_image(vis_src, "debug_src_lm")
+
+        vis_dst = result.copy()
+        for pt in dst_pts:
+            cv2.circle(vis_dst, (int(pt[0]), int(pt[1])), 2, (255, 0, 0), -1)
+        debug_paths["dest_landmarks"] = _save_image(vis_dst, "debug_dst_lm")
+
+        vis_vec = image.copy()
+        for i, (p_s, p_d) in enumerate(zip(src_pts, dst_pts)):
+            if i in moved_set:
+                cv2.arrowedLine(
+                    vis_vec,
+                    (int(p_s[0]), int(p_s[1])),
+                    (int(p_d[0]), int(p_d[1])),
+                    (0, 255, 255), 1, tipLength=0.3,
+                )
+        debug_paths["displacement_vectors"] = _save_image(vis_vec, "debug_disp")
         debug_paths["before_after"] = _save_image(
             np.hstack([image, result]), "debug_before_after"
         )
 
-    return result, debug_paths
+    return result, debug_paths, n_lm, moved_pts, max_disp, tri_count, lm_source
 
 
 @app.get("/")
@@ -2159,6 +2708,7 @@ def api_aging():
     noise = _clamp(noise, 0.0, 1.0)
     detail = _clamp(detail, 0.0, 1.0)
     years = max(-50, min(50, years))
+    save_debug = request.form.get("debug", "false").strip().lower() in {"1", "true", "yes"}
 
     if method == "ai":
         out, model_status, transform_meta = _ai_age_pipeline(
@@ -2175,8 +2725,23 @@ def api_aging():
             lpf=lpf,
             preserve_edges=preserve_edges,
         )
-        freq_variant = out
         ai_variant = out
+        # Compute standard frequency result separately for comparison
+        freq_variant, _ = _frequency_age_pipeline(
+            image=image,
+            mode=mode,
+            strength=strength,
+            years=years,
+            contrast=contrast,
+            tone=tone,
+            noise=noise,
+            detail=detail,
+            deterministic=deterministic,
+            hpf=hpf,
+            lpf=lpf,
+            preserve_edges=preserve_edges,
+            semantic_boost=1.0,
+        )
     else:
         out, transform_meta = _frequency_age_pipeline(
             image=image,
@@ -2191,10 +2756,27 @@ def api_aging():
             hpf=hpf,
             lpf=lpf,
             preserve_edges=preserve_edges,
+            semantic_boost=1.0,
+            save_debug=save_debug,
         )
         model_status = "frequency-dsp"
         freq_variant = out
-        ai_variant = out
+        # AI comparison: boosted parameters for a visually distinct comparison thumbnail
+        ai_variant, _ = _frequency_age_pipeline(
+            image=image,
+            mode=mode,
+            strength=_clamp(strength * 1.10, 0.0, 1.0),
+            years=years,
+            contrast=contrast,
+            tone=tone,
+            noise=noise,
+            detail=_clamp(detail + 0.14, 0.0, 1.0),
+            deterministic=deterministic,
+            hpf=hpf,
+            lpf=lpf,
+            preserve_edges=preserve_edges,
+            semantic_boost=1.28,
+        )
 
     gray_before = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY).astype(np.float32)
     gray_after = cv2.cvtColor(out, cv2.COLOR_BGR2GRAY).astype(np.float32)
@@ -2228,6 +2810,7 @@ def api_aging():
             "energyAfter": energy_after,
             "maskMethod": transform_meta.get("maskMethod"),
             "skinHighFrequencyEnergy": transform_meta.get("skinHighFrequencyEnergy"),
+            "debugMasks": transform_meta.get("debugMasks"),
             "variants": {
                 "frequency": _thumbnail_b64(freq_variant),
                 "ai": _thumbnail_b64(ai_variant),
@@ -2266,10 +2849,18 @@ def api_transform():
     lip   = _norm(lip)
     slim  = _norm(slim)
 
-    warp_mode = (request.form.get("mode", "flow") or "flow").strip().lower()
+    warp_mode = (request.form.get("mode", "delaunay") or "delaunay").strip().lower()
     if warp_mode not in {"delaunay", "tps", "flow"}:
-        warp_mode = "flow"
+        warp_mode = "delaunay"
+    if warp_mode == "flow":
+        warp_mode = "delaunay"   # flow-field retired; map to stable Delaunay
 
+    interp_name = (request.form.get("interpolation", "bicubic") or "bicubic").strip().lower()
+    interp_flag = {
+        "bicubic":  cv2.INTER_CUBIC,
+        "bilinear": cv2.INTER_LINEAR,
+        "nearest":  cv2.INTER_NEAREST,
+    }.get(interp_name, cv2.INTER_CUBIC)
     save_debug = request.form.get("debug", "false").strip().lower() in {"1", "true", "yes"}
 
     # ── Fast path: all sliders at zero → return original immediately ──────
@@ -2286,16 +2877,24 @@ def api_transform():
             "image": encoded_orig,
             "width": int(w_orig),
             "height": int(h_orig),
-            "warpMode": warp_mode,
+            "method": warp_mode,
+            "interpolation": interp_name,
+            "landmarkSource": "none",
+            "usedLandmarkCount": 0,
+            "movedPoints": 0,
+            "maxDisplacement": 0.0,
+            "triangleCount": 0,
+            "maskApplied": False,
             "saved": saved_orig,
             "debug": {},
             "durationMs": round(elapsed_ms, 2),
         })
 
-    result, debug_paths = _apply_expression_warp(
+    result, debug_paths, n_lm, moved_pts, max_disp, tri_count, lm_source = _apply_expression_warp(
         image, smile, brow, lip, slim,
         warp_mode=warp_mode,
         save_debug=save_debug,
+        interp=interp_flag,
     )
 
     h, w = result.shape[:2]
@@ -2308,16 +2907,140 @@ def api_transform():
     elapsed_ms = (time.perf_counter() - started) * 1000.0
     return jsonify(
         {
-            "ok":        True,
-            "image":     encoded,
-            "width":     int(w),
-            "height":    int(h),
-            "warpMode":  warp_mode,
-            "saved":     saved,
-            "debug":     debug_paths,
-            "durationMs": round(elapsed_ms, 2),
+            "ok":                True,
+            "image":             encoded,
+            "width":             int(w),
+            "height":            int(h),
+            "method":            warp_mode,
+            "interpolation":     interp_name,
+            "landmarkSource":    lm_source,
+            "usedLandmarkCount": int(n_lm),
+            "movedPoints":       int(moved_pts),
+            "maxDisplacement":   round(float(max_disp), 2),
+            "triangleCount":     int(tri_count),
+            "maskApplied":       True,
+            "saved":             saved,
+            "debug":             debug_paths,
+            "durationMs":        round(elapsed_ms, 2),
         }
     )
+
+
+@app.post("/api/expression-transfer")
+def api_expression_transfer():
+    """
+    Transfer the expression from a reference face image onto a target face image.
+    Both faces must be detectable. Uses 68-point landmark displacement (Delaunay warping).
+    """
+    started = time.perf_counter()
+
+    try:
+        target = _read_image(request.files.get("target") or request.files.get("image"))
+    except ValueError as exc:
+        return _error(str(exc), 400)
+
+    ref_file = request.files.get("reference")
+    if ref_file is None or not ref_file.filename:
+        return _error("Reference image is required.", 400)
+    try:
+        reference = _read_image(ref_file)
+    except ValueError as exc:
+        return _error(f"Reference image: {exc}", 400)
+
+    try:
+        strength = float(request.form.get("strength", 0.6))
+        strength = _clamp(strength, 0.1, 1.0)
+    except ValueError:
+        strength = 0.6
+
+    # ---------- Landmarks ----------
+    ref_pts, ref_method = _get_68_pts_for_warp(reference)
+    tgt_pts, tgt_method = _get_68_pts_for_warp(target)
+
+    if len(ref_pts) < 68 or len(tgt_pts) < 68:
+        return _error("Could not detect sufficient landmarks in one or both images.", 422)
+
+    h, w = target.shape[:2]
+
+    # ---------- Neutral reference: synthetic 68pts from detected bbox ----------
+    det_ref = _detect_face_bbox(reference)
+    if det_ref:
+        rbx, rby, rbw, rbh, _ = det_ref
+    else:
+        rh, rw = reference.shape[:2]
+        rbx, rby, rbw, rbh = int(rw * 0.18), int(rh * 0.12), int(rw * 0.64), int(rh * 0.76)
+    neutral_ref = np.array(
+        [[float(x), float(y)]
+         for x, y in _synthetic_68_landmarks_from_bbox(rbx, rby, rbw, rbh,
+                                                        reference.shape[1], reference.shape[0])],
+        dtype=np.float32,
+    )
+
+    # ---------- Compute normalised displacements from reference → neutral ----------
+    ref_min = ref_pts.min(axis=0)
+    ref_max = ref_pts.max(axis=0)
+    ref_face_w = max(float(ref_max[0] - ref_min[0]), 1.0)
+    ref_face_h = max(float(ref_max[1] - ref_min[1]), 1.0)
+
+    tgt_min = tgt_pts.min(axis=0)
+    tgt_max = tgt_pts.max(axis=0)
+    tgt_face_w = max(float(tgt_max[0] - tgt_min[0]), 1.0)
+    tgt_face_h = max(float(tgt_max[1] - tgt_min[1]), 1.0)
+
+    ref_disp_norm = ref_pts - neutral_ref
+    ref_disp_norm[:, 0] /= ref_face_w
+    ref_disp_norm[:, 1] /= ref_face_h
+
+    # Apply scaled displacements to target landmarks
+    target_dst = tgt_pts.copy()
+    target_dst[:, 0] += ref_disp_norm[:, 0] * tgt_face_w * strength
+    target_dst[:, 1] += ref_disp_norm[:, 1] * tgt_face_h * strength
+
+    # Clamp displacement per-point to <= 15% of face size (prevent wild warping)
+    face_size = max(tgt_face_w, tgt_face_h)
+    disp_raw = target_dst - tgt_pts
+    norms = np.linalg.norm(disp_raw, axis=1, keepdims=True)
+    max_allowed = 0.15 * face_size
+    overflow = (norms > max_allowed) & (norms > 0)
+    if np.any(overflow):
+        scale = np.where(overflow, max_allowed / (norms + 1e-9), 1.0)
+        target_dst = tgt_pts + disp_raw * scale
+
+    target_dst[:, 0] = np.clip(target_dst[:, 0], 1.0, float(w - 2))
+    target_dst[:, 1] = np.clip(target_dst[:, 1], 1.0, float(h - 2))
+
+    # ---------- Delaunay warp ----------
+    src_full = _add_boundary_points(tgt_pts, w, h)
+    dst_full = _add_boundary_points(target_dst, w, h)
+    tris = _triangle_indices_from_subdiv(src_full, w, h)
+
+    src_f32 = target.astype(np.float32)
+    result = src_f32.copy()
+    for (i, j, k) in tris:
+        t_src = np.array([src_full[i], src_full[j], src_full[k]], dtype=np.float32)
+        t_dst = np.array([dst_full[i], dst_full[j], dst_full[k]], dtype=np.float32)
+        _warp_triangle(src_f32, result, t_src, t_dst, interp=cv2.INTER_CUBIC)
+    result = np.clip(result, 0, 255).astype(np.uint8)
+
+    try:
+        encoded = _encode_base64_jpeg(result)
+    except ValueError as exc:
+        return _error(str(exc), 500)
+
+    saved = _save_image(result, "expr-transfer")
+    elapsed_ms = (time.perf_counter() - started) * 1000.0
+
+    return jsonify({
+        "ok": True,
+        "image": encoded,
+        "width": int(w),
+        "height": int(h),
+        "refMethod": ref_method,
+        "targetMethod": tgt_method,
+        "triangleCount": len(tris),
+        "saved": saved,
+        "durationMs": round(elapsed_ms, 2),
+    })
 
 
 if __name__ == "__main__":

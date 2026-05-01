@@ -230,8 +230,13 @@
               <video id="webcamVideo" autoplay playsinline muted></video>
               <canvas id="webcamCanvas" hidden></canvas>
             </div>
+            <div id="liveOutputWrap" style="display:none;padding:6px 0;">
+              <img id="liveOutput" alt="Live preview"
+                style="width:100%;border-radius:8px;border:1px solid rgba(139,92,246,.25);" />
+            </div>
             <div class="webcam-actions">
               <button class="btn btn-primary" id="btnCapture">📸 Capture Frame</button>
+              <button class="btn btn-outline" id="btnLiveMode">⏵ Live Mode</button>
               <button class="btn btn-ghost" id="btnCancelWebcam">Cancel</button>
             </div>
           </div>
@@ -1417,7 +1422,10 @@
           </div>
           <div class="ref-preview" id="refPreview" style="display:none">
             <img id="refImg" src="" alt="Reference face" />
-            <button class="btn btn-ghost btn-xs" id="btnClearRef">&#x2715; Clear</button>
+            <div style="display:flex;gap:6px;margin-top:6px;">
+              <button class="btn btn-ghost btn-xs" id="btnClearRef">&#x2715; Clear</button>
+              <button class="btn btn-primary btn-xs" id="btnApplyTransfer">&#x279C; Transfer Expression</button>
+            </div>
           </div>
         </div>
 

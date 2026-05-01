@@ -900,7 +900,7 @@ function ensureExpressionPhotoElements() {
       c.id = id;
       c.style.cssText = [
         'position:absolute', 'inset:0', 'width:100%', 'height:100%',
-        'border-radius:12px', 'display:none',
+        'border-radius:12px', 'display:none', 'object-fit:contain', 'background:#0b1220',
       ].join(';');
       body.prepend(c);
     }
@@ -913,19 +913,28 @@ function ensureExpressionPhotoElements() {
 
 function renderExpressionCanvasFromDataUrl(dataUrl) {
   const canvas = document.getElementById('exprTransformedCanvas');
-  if (!canvas || canvas.style.display === 'none' || !dataUrl) return;
+  if (!canvas || !dataUrl) return;
+  // Ensure the canvas is visible before drawing
+  if (canvas.style.display === 'none') canvas.style.display = 'block';
 
   const tmpImg = new Image();
   tmpImg.onload = () => {
     const rect = canvas.getBoundingClientRect();
-    const W = Math.round(rect.width)  || 300;
-    const H = Math.round(rect.height) || 300;
+    const W = Math.round(rect.width)  || 400;
+    const H = Math.round(rect.height) || 400;
     if (canvas.width !== W)  canvas.width  = W;
     if (canvas.height !== H) canvas.height = H;
 
     const ctx = canvas.getContext('2d');
     ctx.clearRect(0, 0, W, H);
-    ctx.drawImage(tmpImg, 0, 0, W, H);
+    const scale = Math.min(W / tmpImg.naturalWidth, H / tmpImg.naturalHeight);
+    const dw = tmpImg.naturalWidth * scale;
+    const dh = tmpImg.naturalHeight * scale;
+    const dx = (W - dw) / 2;
+    const dy = (H - dh) / 2;
+    ctx.fillStyle = '#0b1220';
+    ctx.fillRect(0, 0, W, H);
+    ctx.drawImage(tmpImg, dx, dy, dw, dh);
   };
   tmpImg.src = dataUrl;
 }
@@ -1129,8 +1138,8 @@ function updateExprSvg() {
   }
   const browL = $('#exBrowL'), browR = $('#exBrowR');
   if (browL) {
-    const by = 102 - brow * 14;
-    const cy = 95 - brow * 14;
+    const by = 102 - brow * 30;
+    const cy = 95  - brow * 30;
     browL.setAttribute('d', `M72 ${by} Q80 ${cy} 92 ${by}`);
     browR.setAttribute('d', `M108 ${by} Q120 ${cy} 128 ${by}`);
   }
@@ -1151,7 +1160,6 @@ function updateExprSvg() {
   }
 
   backendState.analysisLoaded = false;
-  updateAnalysisMetrics();
 }
 
 if ($('#btnResetExpr')) $('#btnResetExpr').addEventListener('click', () => {
@@ -1173,7 +1181,6 @@ if (toggleMesh && meshOverlay) toggleMesh.addEventListener('change', () => {
   const s = $(`#${id}`), v = $(`#v${id.slice(1)}`);
   if (s && v) s.addEventListener('input', () => {
     v.textContent = s.value + '%';
-    updateAnalysisMetrics();
   });
 });
 const sTargetAge = $('#sTargetAge'), vTargetAge = $('#vTargetAge');
@@ -1182,7 +1189,6 @@ if (sTargetAge && vTargetAge) sTargetAge.addEventListener('input', () => {
   vTargetAge.textContent = v === 0 ? '0' : (v > 0 ? '+' + v : v);
   updateApparentAge(v);
   updateAgeOffsetLabel(v);
-  updateAnalysisMetrics();
 });
 
 /* ═══════════════════ SEGMENTED CONTROLS ═══════════════════ */
@@ -1232,6 +1238,69 @@ function updateAgeOffsetLabel(offset) { } /* handled inside updateApparentAge */
 let webcamStream = null;
 const webcamCard = $('#webcamCard'), webcamVideo = $('#webcamVideo'), webcamCanvas = $('#webcamCanvas');
 
+/* ═══════════════════ WEBCAM LIVE MODE ═══════════════════ */
+let _liveTimer = null;
+let _liveProcessing = false;
+
+function startLiveMode() {
+  if (_liveTimer) return;
+  const liveOutputWrap = $('#liveOutputWrap');
+  const liveOutput = $('#liveOutput');
+  if (liveOutputWrap) liveOutputWrap.style.display = 'block';
+  const btnLive = $('#btnLiveMode');
+  if (btnLive) btnLive.textContent = '⏹ Stop Live';
+
+  _liveTimer = setInterval(async () => {
+    if (_liveProcessing || !webcamVideo || !webcamCanvas || !webcamStream) return;
+    const smile = Number($('#sSmile')?.value || 0);
+    const brow  = Number($('#sBrow')?.value  || 0);
+    const lip   = Number($('#sLip')?.value   || 0);
+    const slim  = Number($('#sSlim')?.value  || 0);
+    if (smile === 0 && brow === 0 && lip === 0 && slim === 0) return;
+    _liveProcessing = true;
+    try {
+      webcamCanvas.width  = webcamVideo.videoWidth  || 640;
+      webcamCanvas.height = webcamVideo.videoHeight || 480;
+      webcamCanvas.getContext('2d').drawImage(webcamVideo, 0, 0);
+      const frameBlob = dataUrlToBlob(webcamCanvas.toDataURL('image/jpeg', 0.75));
+      if (!frameBlob) return;
+      const fd = new FormData();
+      fd.append('image', frameBlob, 'live-frame.jpg');
+      fd.append('smile', String(smile));
+      fd.append('brow',  String(brow));
+      fd.append('lip',   String(lip));
+      fd.append('slim',  String(slim));
+      fd.append('mode',  'delaunay');
+      const res = await fetch('/api/transform', { method: 'POST', body: fd });
+      const data = await res.json();
+      if (data.ok && data.image && liveOutput) {
+        liveOutput.src = `data:image/jpeg;base64,${data.image}`;
+      }
+    } catch (_) { /* ignore mid-stream errors */ }
+    finally { _liveProcessing = false; }
+  }, 450); // ~2 fps — keeps server load acceptable
+}
+
+function stopLiveMode() {
+  if (_liveTimer) { clearInterval(_liveTimer); _liveTimer = null; }
+  const liveOutputWrap = $('#liveOutputWrap');
+  if (liveOutputWrap) liveOutputWrap.style.display = 'none';
+  const btnLive = $('#btnLiveMode');
+  if (btnLive) btnLive.textContent = '⏵ Live Mode';
+  _liveProcessing = false;
+}
+
+if ($('#btnLiveMode')) {
+  $('#btnLiveMode').addEventListener('click', () => {
+    if (_liveTimer) {
+      stopLiveMode();
+    } else {
+      if (!webcamStream) { toast('Start webcam first.', 'warning'); return; }
+      startLiveMode();
+    }
+  });
+}
+
 function startWebcam() {
   if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
     toast('Webcam is not supported in this browser.', 'warning');
@@ -1249,6 +1318,7 @@ function startWebcam() {
     });
 }
 function stopWebcam() {
+  stopLiveMode();
   if (webcamStream) { webcamStream.getTracks().forEach(t => t.stop()); webcamStream = null; }
   webcamCard.style.display = 'none';
   uploadCard.style.display = '';
@@ -1420,6 +1490,30 @@ if ($('#btnRunPP')) $('#btnRunPP').addEventListener('click', async function () {
       }
     }
 
+    // ── Carry preprocessed image forward so next pipeline steps use it ──
+    if (data.saved) {
+      try {
+        const ppUrl = '/' + data.saved + '?t=' + Date.now();
+        const ppResp = await fetch(ppUrl);
+        const ppBlob = await ppResp.blob();
+        const ppDataUrl = await new Promise(resolve => {
+          const reader = new FileReader();
+          reader.onload = () => resolve(reader.result);
+          reader.readAsDataURL(ppBlob);
+        });
+        setPipelineImage(ppDataUrl, {
+          fileName: appState.fileName,
+          format: data.grayscale ? 'Grayscale' : appState.format,
+          sizeText: appState.sizeText,
+          dimensions: `${data.width} × ${data.height}`,
+        });
+        backendState.landmarksLoaded = false;
+        backendState.lastExprDataUrl = '';
+        backendState.lastAgingDataUrl = '';
+        backendState.analysisLoaded = false;
+      } catch (_ppErr) { /* non-critical: pipeline still works with original */ }
+    }
+
     toast(`Preprocessed → ${data.width}×${data.height}${data.grayscale ? ' grayscale' : ' color'} · ${data.durationMs} ms`, 'success');
   } catch (err) {
     toast('Preprocessing error: ' + err.message, 'error');
@@ -1501,6 +1595,46 @@ function drawSvgToCanvas(svgEl, done) {
   img.src = url;
 }
 
+/* ═══════════════════ AGING VARIANT THUMBNAILS ═══════════════════ */
+function _applyAgingVariantThumbs(variants, ageBefore, ageAfter) {
+  const cols = document.querySelectorAll('#methodCompareCard .mcg-col');
+  if (!cols || cols.length < 3) return;
+
+  const injectThumb = (col, src) => {
+    const body = col.querySelector('.mcg-body');
+    if (!body) return;
+    body.style.position = 'relative';
+    let img = col.querySelector('img.mcg-thumb');
+    if (!img) {
+      img = document.createElement('img');
+      img.className = 'mcg-thumb';
+      img.alt = '';
+      img.style.cssText = 'position:absolute;inset:0;width:100%;height:100%;object-fit:cover;border-radius:8px;z-index:1;';
+      body.appendChild(img);
+    }
+    img.src = src;
+  };
+
+  // Original column
+  if (appState.imageDataUrl) injectThumb(cols[0], appState.imageDataUrl);
+  const origBadge = cols[0].querySelector('.age-badge strong');
+  if (origBadge && ageBefore != null) origBadge.textContent = ageBefore;
+
+  // Frequency column
+  if (variants.frequency) {
+    injectThumb(cols[1], `data:image/jpeg;base64,${variants.frequency}`);
+    const freqBadge = document.querySelector('#ageFreqComp');
+    if (freqBadge && ageAfter != null) freqBadge.textContent = ageAfter;
+  }
+
+  // AI column
+  if (variants.ai) {
+    injectThumb(cols[2], `data:image/jpeg;base64,${variants.ai}`);
+    const aiBadge = document.querySelector('#ageAiComp');
+    if (aiBadge && ageAfter != null) aiBadge.textContent = ageAfter;
+  }
+}
+
 function saveSvgAsPng(svgEl, fileName) {
   drawSvgToCanvas(svgEl, canvas => {
     canvas.toBlob(blob => {
@@ -1555,6 +1689,47 @@ if ($('#btnCompareAging')) $('#btnCompareAging').addEventListener('click', () =>
   toast('Scrolled to comparison panel.', 'info');
 });
 
+/* ═══════════════════ EXPRESSION TRANSFER ═══════════════════ */
+if ($('#btnApplyTransfer')) $('#btnApplyTransfer').addEventListener('click', async function () {
+  if (!appState.imageDataUrl) { toast('Upload a target image first.', 'warning'); return; }
+  const refSrc = $('#refImg')?.src;
+  if (!refSrc || refSrc === window.location.href) { toast('Upload a reference expression image first.', 'warning'); return; }
+
+  const btn = this;
+  const prev = btn.innerHTML;
+  btn.disabled = true;
+  btn.textContent = '\u29d7 Transferring…';
+
+  try {
+    const targetBlob = await getCurrentImageBlob();
+    if (!targetBlob) throw new Error('No target image available.');
+    const refResp = await fetch(refSrc);
+    const refBlob = await refResp.blob();
+
+    const fd = new FormData();
+    fd.append('target', targetBlob, appState.fileName || 'target.jpg');
+    fd.append('reference', refBlob, 'reference.jpg');
+    fd.append('strength', '0.6');
+
+    const res = await fetch('/api/expression-transfer', { method: 'POST', body: fd });
+    const data = await res.json();
+    if (!res.ok || !data.ok) throw new Error(data.error || 'Expression transfer failed.');
+
+    const outUrl = `data:image/jpeg;base64,${data.image}`;
+    backendState.lastExprDataUrl = outUrl;
+    backendState.lastAgingDataUrl = '';
+    backendState.analysisLoaded = false;
+    backendState.analysisData = null;
+    renderExpressionCanvasFromDataUrl(outUrl);
+    toast(`Expression transferred \u00b7 ${data.durationMs || 0} ms \u00b7 ${data.triangleCount ?? '?'} tri`, 'success');
+  } catch (err) {
+    toast(`Transfer error: ${err.message}`, 'error');
+  } finally {
+    btn.disabled = false;
+    btn.innerHTML = prev;
+  }
+});
+
 /* ═══════════════════ APPLY WARP FEEDBACK ═══════════════════ */
 if ($('#btnApplyExpr')) $('#btnApplyExpr').addEventListener('click', async function () {
   if (!appState.imageDataUrl) { toast('Upload an image first.', 'warning'); return; }
@@ -1574,6 +1749,9 @@ if ($('#btnApplyExpr')) $('#btnApplyExpr').addEventListener('click', async funct
     fd.append('brow', String(Number($('#sBrow')?.value || 0)));
     fd.append('lip', String(Number($('#sLip')?.value || 0)));
     fd.append('slim', String(Number($('#sSlim')?.value || 0)));
+    fd.append('mode', 'delaunay');
+    fd.append('interpolation', 'bicubic');
+    fd.append('debug', 'false');
 
     const res = await fetch('/api/transform', { method: 'POST', body: fd });
     const data = await res.json();
@@ -1587,7 +1765,7 @@ if ($('#btnApplyExpr')) $('#btnApplyExpr').addEventListener('click', async funct
     backendState.analysisLoaded = false;
     backendState.analysisData = null;
     renderExpressionCanvasFromDataUrl(outUrl);
-    toast(`Expression transform complete (${data.durationMs || 0} ms).`, 'success');
+    toast(`Warped · ${data.method || 'delaunay'} · ${data.usedLandmarkCount ?? '?'} pts · moved ${data.movedPoints ?? '?'} · maxD ${data.maxDisplacement != null ? Number(data.maxDisplacement).toFixed(1) : '?'} · ${data.triangleCount ?? '?'} tri · ${data.durationMs || 0} ms`, 'success');
   } catch (err) {
     toast(`Expression transform error: ${err.message}`, 'error');
   } finally {
@@ -1635,6 +1813,22 @@ if ($('#btnSimulate')) $('#btnSimulate').addEventListener('click', async functio
     backendState.analysisLoaded = false;
     backendState.analysisData = null;
     syncAgingPhotoPanels();
+
+    // ── Update apparent age from backend estimate ──
+    if (data.apparentAgeBefore != null) {
+      const elOrig = $('#ageOriginal');
+      if (elOrig) elOrig.textContent = data.apparentAgeBefore;
+    }
+    if (data.apparentAgeAfter != null) {
+      const elSim = $('#ageTransformed');
+      if (elSim) elSim.textContent = data.apparentAgeAfter;
+      const diff = (data.apparentAgeAfter || 0) - (data.apparentAgeBefore || 28);
+      const elOffset = $('#ageOffsetLabel');
+      if (elOffset) elOffset.textContent = diff >= 0 ? `+${diff} Years` : `${diff} Years`;
+    }
+    // ── Update method compare thumbnails ──
+    if (data.variants) _applyAgingVariantThumbs(data.variants, data.apparentAgeBefore, data.apparentAgeAfter);
+
     toast(`Aging simulation applied (${data.durationMs || 0} ms).`, 'success');
     fetchAnalysisFromBackend(true);
   } catch (err) {
