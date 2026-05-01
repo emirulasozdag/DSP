@@ -37,11 +37,12 @@ img[100:140, 100:140] = [200, 160, 140]
 
 # ── 3. _apply_expression_warp — return shape & dtype ─────────────────────────
 ret = mod._apply_expression_warp(img, 0.5, 0.3, 0.2, 0.3, warp_mode="delaunay", save_debug=False)
-assert len(ret) == 6, f"Expected 6-tuple, got {len(ret)}"
-r_dl, debug_dl, n_lm, moved, max_d, tri_c = ret
+assert len(ret) == 7, f"Expected 7-tuple, got {len(ret)}"
+r_dl, debug_dl, n_lm, moved, max_d, tri_c, lm_src = ret
 assert r_dl.shape == img.shape, f"delaunay shape mismatch: {r_dl.shape}"
 assert r_dl.dtype == np.uint8, "delaunay result must be uint8"
 assert isinstance(debug_dl, dict), "debug must be a dict"
+assert lm_src in {"mediapipe468", "fallback68", "none"}, f"unexpected landmark source {lm_src}"
 print(f"_apply_expression_warp delaunay: OK — n_lm={n_lm} moved={moved} tri={tri_c}")
 
 # TPS mode accepted without crashing
@@ -51,12 +52,13 @@ assert r_tps.shape == img.shape and r_tps.dtype == np.uint8
 print("_apply_expression_warp tps: OK")
 
 # ── 4. Zero sliders → identity ────────────────────────────────────────────────
-r0, dbg0, lm0, mv0, md0, tc0 = mod._apply_expression_warp(img, 0, 0, 0, 0)
+r0, dbg0, lm0, mv0, md0, tc0, src0 = mod._apply_expression_warp(img, 0, 0, 0, 0)
 assert np.array_equal(r0, img), "Zero sliders must return original unchanged"
 assert lm0 == 0, f"usedLandmarkCount must be 0 for zero sliders, got {lm0}"
 assert mv0 == 0, f"movedPoints must be 0 for zero sliders, got {mv0}"
 assert md0 == 0.0, f"maxDisplacement must be 0 for zero sliders, got {md0}"
 assert tc0 == 0, f"triangleCount must be 0 for zero sliders, got {tc0}"
+assert src0 == "none", f"landmark source must be none for zero sliders, got {src0}"
 print("Zero sliders identity: OK")
 
 # ── 5. _build_dst_68_direct — per-slider isolation ───────────────────────────

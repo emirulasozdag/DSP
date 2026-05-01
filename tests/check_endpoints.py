@@ -322,6 +322,8 @@ class TestTransform(_BaseTest):
         mse_val = _mse(zero_img, slim_img)
         self.assertGreater(mse_val, 0.2, "Slim=80 should change something")
         self.assertLess(mse_val, 600.0, f"Slim=80 too extreme; MSE={mse_val:.1f}")
+        self.assertEqual(payload["triangleCount"], 0,
+                         "Slim-only transform should use dense flow, not jaw Delaunay triangles")
 
     def test_delaunay_method_accepted(self):
         _, payload = self._transform_and_decode(smile=50, mode="delaunay")

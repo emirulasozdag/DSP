@@ -1721,6 +1721,180 @@ def _lock_identity_regions(
     return flow
 
 
+def _lock_slimming_identity_regions(
+    flow: np.ndarray, src_pts: np.ndarray, groups: dict,
+) -> np.ndarray:
+    """
+    Keep expression features stable during face slimming.
+
+    Slimming should reshape the outer lower-face contour.  The mouth, nose and
+    eyes are identity/expression features, so they get a stronger lock than the
+    general expression-flow lock above.
+    """
+    h, w = flow.shape[:2]
+    face_w = max(float(np.max(src_pts[:, 0]) - np.min(src_pts[:, 0])), 1.0)
+    yy, xx = np.ogrid[:h, :w]
+    xx = xx.astype(np.float32)
+    yy = yy.astype(np.float32)
+    lock_mask = np.zeros((h, w), dtype=np.float32)
+
+    lock_specs = [
+        (_group_centroid(src_pts, groups, "nose_tip", "center"), face_w * 0.090, 1.00),
+        (_group_centroid(src_pts, groups, "lower_eye_left"),     face_w * 0.060, 0.95),
+        (_group_centroid(src_pts, groups, "lower_eye_right"),    face_w * 0.060, 0.95),
+        (_group_centroid(src_pts, groups, "mouth_left"),         face_w * 0.105, 1.00),
+        (_group_centroid(src_pts, groups, "mouth_right"),        face_w * 0.105, 1.00),
+        (_group_centroid(src_pts, groups, "upper_lip", "inner_upper"), face_w * 0.135, 1.00),
+        (_group_centroid(src_pts, groups, "lower_lip", "inner_lower"), face_w * 0.135, 1.00),
+    ]
+
+    for pt, radius, strength in lock_specs:
+        if pt is None:
+            continue
+        d2 = (xx - float(pt[0])) ** 2 + (yy - float(pt[1])) ** 2
+        lock_mask = np.maximum(
+            lock_mask,
+            np.exp(-d2 / (radius ** 2 + 1e-6)) * float(strength),
+        )
+
+    lock_mask = np.clip(lock_mask, 0.0, 1.0)
+    flow[:, :, 0] *= 1.0 - lock_mask
+    flow[:, :, 1] *= 1.0 - lock_mask
+    return flow
+
+
+def _build_face_slimming_flow(
+    h: int,
+    w: int,
+    src_pts: np.ndarray,
+    groups: dict,
+    slim: float,
+) -> np.ndarray:
+    """
+    Dense inverse-remap field for natural face slimming.
+
+    Instead of a single pull near the mouth, this applies several small,
+    horizontally inward forces along both jaw/masseter contours.  The strongest
+    pull is around the lower cheek and jaw angle; chin movement is subtle.
+    """
+    flow = np.zeros((h, w, 2), dtype=np.float32)
+    if abs(slim) < 1e-4:
+        return flow
+
+    min_x = float(np.min(src_pts[:, 0]))
+    max_x = float(np.max(src_pts[:, 0]))
+    min_y = float(np.min(src_pts[:, 1]))
+    max_y = float(np.max(src_pts[:, 1]))
+    face_w = max(max_x - min_x, 1.0)
+    face_h = max(max_y - min_y, 1.0)
+    center_pt = _group_centroid(src_pts, groups, "center", "nose_tip")
+    face_cx = float(center_pt[0]) if center_pt is not None else (min_x + face_w * 0.5)
+
+    sl = float(np.sign(slim) * abs(slim) ** 1.15)
+    max_pull = face_w * 0.120
+
+    def add_jaw_forces(key: str):
+        idxs = [i for i in groups.get(key, []) if 0 <= i < len(src_pts)]
+        for i in idxs:
+            p = src_pts[i].astype(np.float32)
+            y_norm = float(np.clip((p[1] - min_y) / face_h, 0.0, 1.0))
+            x_dist = abs(float(face_cx - p[0])) / face_w
+
+            # Upper cheek gets a lighter pull; lower cheek/jaw angle carries
+            # the visible slimming.  Inner points near the mouth contribute less.
+            vertical_strength = float(np.clip((y_norm - 0.34) / 0.46, 0.0, 1.0))
+            outer_strength = float(np.clip((x_dist - 0.13) / 0.22, 0.0, 1.0))
+            strength = 0.34 + 0.66 * vertical_strength
+            strength *= 0.45 + 0.55 * outer_strength
+            if strength <= 0.05:
+                continue
+
+            raw_pull = (face_cx - float(p[0])) * 0.205 * sl * strength
+            pull_x = float(np.clip(raw_pull, -max_pull, max_pull))
+            if abs(pull_x) < 0.15:
+                continue
+
+            # Keep the force on the contour/lower cheek rather than drifting
+            # toward the mouth centre.
+            anchor = p.copy()
+            anchor[0] += pull_x * 0.10
+            rx = face_w * (0.085 + 0.040 * vertical_strength)
+            ry = face_h * (0.100 + 0.065 * vertical_strength)
+            _muscle_add_force(flow, float(anchor[0]), float(anchor[1]), rx, ry, 0.0, pull_x, 0.0, 1.0)
+
+    add_jaw_forces("jaw_left")
+    add_jaw_forces("jaw_right")
+
+    for cheek_key in ("cheek_left", "cheek_right"):
+        cheek = _group_centroid(src_pts, groups, cheek_key)
+        if cheek is None:
+            continue
+        y_norm = float(np.clip((cheek[1] - min_y) / face_h, 0.0, 1.0))
+        if y_norm < 0.34:
+            continue
+        cheek_pull = float(np.clip((face_cx - float(cheek[0])) * 0.085 * sl, -max_pull * 0.55, max_pull * 0.55))
+        if abs(cheek_pull) >= 0.15:
+            _muscle_add_force(
+                flow,
+                float(cheek[0] + cheek_pull * 0.10),
+                float(cheek[1] + face_h * 0.045),
+                face_w * 0.115,
+                face_h * 0.140,
+                0.0,
+                cheek_pull,
+                0.0,
+                0.80,
+            )
+
+    chin = _group_centroid(src_pts, groups, "chin")
+    if chin is not None:
+        _muscle_add_force(
+            flow,
+            float(chin[0]),
+            float(chin[1]),
+            face_w * 0.16,
+            face_h * 0.07,
+            0.0,
+            0.0,
+            -sl * face_h * 0.006,
+            0.45,
+        )
+
+    return _lock_slimming_identity_regions(flow, src_pts, groups)
+
+
+def _apply_slimming_flow(
+    image: np.ndarray,
+    src_pts: np.ndarray,
+    groups: dict,
+    slim: float,
+) -> np.ndarray:
+    """
+    Apply jaw slimming as a dense local inverse-remap field.
+
+    Moving the jaw with Delaunay triangles creates skinny triangles between the
+    inward jaw and the original face hull; on real photos this can show up as a
+    bitten cheek or coloured stripe.  A smooth remap field keeps the jaw/cheek
+    tissue coherent while naturally revealing the unchanged background.
+    """
+    if abs(slim) < 1e-4:
+        return image
+
+    h, w = image.shape[:2]
+    flow = _build_face_slimming_flow(h, w, src_pts, groups, slim)
+
+    xs = np.arange(w, dtype=np.float32)
+    ys = np.arange(h, dtype=np.float32)
+    xx, yy = np.meshgrid(xs, ys)
+    return cv2.remap(
+        image,
+        xx + flow[:, :, 0],
+        yy + flow[:, :, 1],
+        interpolation=cv2.INTER_CUBIC,
+        borderMode=cv2.BORDER_REFLECT_101,
+    )
+
+
 # ── Legacy point-displacement helpers (kept for backward compatibility) ────────
 
 def _falloff_weights(src_points: np.ndarray, anchor_idxs: list, sigma: float) -> np.ndarray:
@@ -2307,11 +2481,14 @@ def _apply_expression_warp(
     lm_source = "mediapipe468" if n_lm >= 468 else "fallback68"
 
     # 2. Build displaced destinations via per-group Gaussian falloff.
-    #    Only expression-relevant groups move; identity anchors stay fixed.
-    dst_pts = _build_dst_landmarks_v2(src_pts, groups, smile, brow, lip, slim, w, h)
+    #    Smile/brow/lip stay on the anatomical mesh.  Slimming is applied later
+    #    as a dense remap because jaw-only Delaunay movement creates visible
+    #    cheek-edge artefacts on high-contrast backgrounds.
+    dst_pts_stats = _build_dst_landmarks_v2(src_pts, groups, smile, brow, lip, slim, w, h)
+    dst_pts_mesh = _build_dst_landmarks_v2(src_pts, groups, smile, brow, lip, 0.0, w, h)
 
     # 3. Per-point displacement stats used by response fields and debug output
-    disp = np.linalg.norm(dst_pts - src_pts, axis=1)
+    disp = np.linalg.norm(dst_pts_stats - src_pts, axis=1)
     moved_pts = int(np.sum(disp > 0.3))
     max_disp = float(np.max(disp)) if moved_pts > 0 else 0.0
     moved_indices = [int(i) for i in np.where(disp > 0.3)[0]]
@@ -2327,13 +2504,19 @@ def _apply_expression_warp(
     #    Without this fence, Delaunay creates large triangles from the slimmed
     #    jaw all the way to the oval/border anchors; those triangles sample the
     #    exposed background gap and produce the blue-stripe artefact on the cheeks.
-    fence = _hull_fence_points(src_pts, n=60)   # same coords in src and dst
-    src_full = _add_boundary_points(np.vstack([src_pts, fence]), w, h)
-    dst_full = _add_boundary_points(np.vstack([dst_pts, fence]), w, h)
-
     debug_paths: dict = {}
+    has_mesh_expression = (
+        abs(smile) >= 1e-4 or abs(brow) >= 1e-4 or abs(lip) >= 1e-4
+    )
 
-    if warp_mode == "tps":
+    if has_mesh_expression:
+        fence = _hull_fence_points(src_pts, n=60)   # same coords in src and dst
+        src_full = _add_boundary_points(np.vstack([src_pts, fence]), w, h)
+        dst_full = _add_boundary_points(np.vstack([dst_pts_mesh, fence]), w, h)
+    else:
+        src_full = dst_full = None
+
+    if has_mesh_expression and warp_mode == "tps":
         try:
             # Use boundary-anchored control sets (src_full / dst_full) so the
             # background anchor points keep the warp to zero outside the face.
@@ -2361,7 +2544,7 @@ def _apply_expression_warp(
         except Exception:
             warp_mode = "delaunay"
 
-    if warp_mode != "tps":
+    if has_mesh_expression and warp_mode != "tps":
         # 5. Delaunay triangulation on full landmark + boundary set
         tris = _triangle_indices_from_subdiv(src_full, w, h)
         tri_count = len(tris)
@@ -2374,7 +2557,10 @@ def _apply_expression_warp(
             t_dst = np.array([dst_full[i], dst_full[j], dst_full[k]], dtype=np.float32)
             _warp_triangle(src_f32, warped_f32, t_src, t_dst, interp=interp)
         warped = np.clip(warped_f32, 0, 255).astype(np.uint8)
+    elif has_mesh_expression:
+        tri_count = 0
     else:
+        warped = image.copy()
         tri_count = 0
 
     # 7. Blend warped face back via Gaussian-feathered convex hull mask.
@@ -2385,7 +2571,15 @@ def _apply_expression_warp(
     #    into the face area as coloured stripes or grid artefacts.
     #    Outside the dst-hull the original image shows through, which for any
     #    background is exactly the correct content.
-    result = _blend_warped_face_mask(image, warped, dst_pts, w, h)
+    if has_mesh_expression:
+        result = _blend_warped_face_mask(image, warped, dst_pts_mesh, w, h)
+    else:
+        result = warped
+
+    # 8. Apply face slimming as a dense local remap after the mesh expression
+    #    pass.  This keeps the jaw/cheek boundary smooth and avoids the
+    #    Delaunay fold-over artefact that made slim output look visually broken.
+    result = _apply_slimming_flow(result, src_pts, groups, slim)
 
     if save_debug:
         moved_set = set(moved_indices)
@@ -2396,12 +2590,12 @@ def _apply_expression_warp(
         debug_paths["source_landmarks"] = _save_image(vis_src, "debug_src_lm")
 
         vis_dst = result.copy()
-        for pt in dst_pts:
+        for pt in dst_pts_stats:
             cv2.circle(vis_dst, (int(pt[0]), int(pt[1])), 2, (255, 0, 0), -1)
         debug_paths["dest_landmarks"] = _save_image(vis_dst, "debug_dst_lm")
 
         vis_vec = image.copy()
-        for i, (p_s, p_d) in enumerate(zip(src_pts, dst_pts)):
+        for i, (p_s, p_d) in enumerate(zip(src_pts, dst_pts_stats)):
             if i in moved_set:
                 cv2.arrowedLine(
                     vis_vec,
