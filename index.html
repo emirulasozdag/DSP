@@ -1406,6 +1406,25 @@
             <h3>Reference Expression</h3>
           </div>
           <p class="card-desc" style="margin:0 0 10px">Upload a reference face to transfer its expression via AI.</p>
+          <div class="ref-config">
+            <div class="ref-top-row">
+              <span class="select-label" style="margin:0">Transfer Mode</span>
+              <span class="ref-pill ref-pill-idle" id="refStatusPill">Inactive</span>
+            </div>
+            <div class="seg seg-sm" id="exprTransferMode">
+              <button class="seg-btn" data-mode="slider_only">Slider Only</button>
+              <button class="seg-btn active" data-mode="hybrid">Hybrid</button>
+              <button class="seg-btn" data-mode="reference_only">Reference Only</button>
+            </div>
+
+            <div class="ref-strength-row">
+              <span class="ref-strength-label">Reference Strength</span>
+              <span class="ref-strength-val" id="refStrengthVal">70%</span>
+            </div>
+            <input type="range" min="0" max="100" value="70" class="param-slider" id="sRefStrength" style="--pct:70%" />
+            <p class="ref-status-text" id="refStatusText">No reference image selected. The system will use slider deformation.</p>
+          </div>
+
           <div class="ref-drop" id="refDrop">
             <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2"
               stroke-linecap="round" stroke-linejoin="round">

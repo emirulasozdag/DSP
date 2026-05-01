@@ -52,6 +52,13 @@ MEDIAPIPE_TO_68 = [
     78, 95, 88, 178, 87, 14, 317, 402,
 ]
 
+LM68_REGION_MOUTH = list(range(48, 68))
+LM68_REGION_BROW = list(range(17, 27))
+LM68_REGION_EYES = list(range(36, 48))
+LM68_REGION_NOSE = list(range(27, 36))
+LM68_REGION_JAW = list(range(0, 17))
+LM68_EXPR_ANCHORS = [36, 39, 42, 45, 30, 48, 54]
+
 def _init_face_mesh():
     """Initialize MediaPipe FaceMesh if the installed package exposes it."""
     if mp is None:
@@ -130,21 +137,49 @@ def _get_mediapipe_points(image: np.ndarray):
     backend = FACE_MESH.get("backend")
     runner = FACE_MESH.get("runner")
 
-    if backend == "solutions":
-        rgb = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
-        result = runner.process(rgb)
-        if not result.multi_face_landmarks:
-            return []
-        landmarks = result.multi_face_landmarks[0].landmark
-    elif backend == "tasks":
-        rgb = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
-        mp_image = mp.Image(image_format=mp.ImageFormat.SRGB, data=rgb)
-        result = runner.detect(mp_image)
-        if not result.face_landmarks:
-            return []
-        landmarks = result.face_landmarks[0]
-    else:
+    def _run_once(frame: np.ndarray):
+        if backend == "solutions":
+            rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+            result = runner.process(rgb)
+            if not result.multi_face_landmarks:
+                return []
+            return result.multi_face_landmarks[0].landmark
+        if backend == "tasks":
+            rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+            mp_image = mp.Image(image_format=mp.ImageFormat.SRGB, data=rgb)
+            result = runner.detect(mp_image)
+            if not result.face_landmarks:
+                return []
+            return result.face_landmarks[0]
         print(f"Unknown MediaPipe backend: {backend}")
+        return []
+
+    candidates = [image]
+    min_side = min(h, w)
+    if min_side < 320:
+        # Low-res portraits frequently miss detection; upsample to improve landmark recall.
+        scale = min(3.5, max(1.2, 360.0 / float(min_side)))
+        up = cv2.resize(
+            image,
+            (max(1, int(round(w * scale))), max(1, int(round(h * scale)))),
+            interpolation=cv2.INTER_CUBIC,
+        )
+        candidates.append(up)
+
+        # A mild contrast boost can recover landmarks on dim or compressed frames.
+        ycrcb = cv2.cvtColor(up, cv2.COLOR_BGR2YCrCb)
+        y = ycrcb[:, :, 0]
+        clahe = cv2.createCLAHE(clipLimit=2.2, tileGridSize=(8, 8))
+        ycrcb[:, :, 0] = clahe.apply(y)
+        enhanced = cv2.cvtColor(ycrcb, cv2.COLOR_YCrCb2BGR)
+        candidates.append(enhanced)
+
+    landmarks = []
+    for frame in candidates:
+        landmarks = _run_once(frame)
+        if landmarks:
+            break
+    if not landmarks:
         return []
 
     points = []
@@ -1087,7 +1122,67 @@ def _clip_point(x: float, y: float, width: int, height: int):
     return max(0, min(width - 1, int(round(x)))), max(0, min(height - 1, int(round(y))))
 
 
-def _synthetic_68_landmarks_from_bbox(x: int, y: int, w: int, h: int, width: int, height: int):
+def _estimate_fallback_expression_cues(image: np.ndarray, x: int, y: int, w: int, h: int):
+    gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+    x1 = max(0, x)
+    y1 = max(0, y)
+    x2 = min(gray.shape[1], x + w)
+    y2 = min(gray.shape[0], y + h)
+    if x2 <= x1 or y2 <= y1:
+        return {"mouth_open": 0.30, "mouth_width": 0.48, "smile_bias": 0.0, "quality": 0.0}
+
+    roi = gray[y1:y2, x1:x2]
+    rh, rw = roi.shape[:2]
+    if rh < 20 or rw < 20:
+        return {"mouth_open": 0.30, "mouth_width": 0.48, "smile_bias": 0.0, "quality": 0.0}
+
+    my0 = int(0.56 * rh)
+    my1 = int(0.93 * rh)
+    mx0 = int(0.18 * rw)
+    mx1 = int(0.82 * rw)
+    mouth = roi[my0:my1, mx0:mx1]
+    if mouth.size == 0:
+        return {"mouth_open": 0.30, "mouth_width": 0.48, "smile_bias": 0.0, "quality": 0.0}
+
+    blurred = cv2.GaussianBlur(mouth, (5, 5), 0)
+    thr = float(np.percentile(blurred, 30))
+    mask = (blurred <= thr).astype(np.uint8) * 255
+    kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (3, 3))
+    mask = cv2.morphologyEx(mask, cv2.MORPH_OPEN, kernel)
+    mask = cv2.morphologyEx(mask, cv2.MORPH_CLOSE, kernel)
+
+    contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+    if not contours:
+        return {"mouth_open": 0.30, "mouth_width": 0.48, "smile_bias": 0.0, "quality": 0.0}
+
+    cnt = max(contours, key=cv2.contourArea)
+    area = float(cv2.contourArea(cnt))
+    if area < 0.004 * float(mouth.shape[0] * mouth.shape[1]):
+        return {"mouth_open": 0.30, "mouth_width": 0.48, "smile_bias": 0.0, "quality": 0.0}
+
+    bx, by, bw, bh = cv2.boundingRect(cnt)
+    mouth_open = float(_clamp(bh / (max(1.0, mouth.shape[0] * 0.42)), 0.08, 1.35))
+    mouth_width = float(_clamp(bw / max(1.0, float(mouth.shape[1])), 0.22, 1.0))
+    center_y = float((by + (bh * 0.5)) / max(1.0, float(mouth.shape[0])))
+    smile_bias = float(_clamp((0.56 - center_y) * 1.75, -0.9, 0.9))
+    quality = float(_clamp((area / max(1.0, float(mouth.shape[0] * mouth.shape[1]))) * 25.0, 0.0, 1.0))
+    return {
+        "mouth_open": mouth_open,
+        "mouth_width": mouth_width,
+        "smile_bias": smile_bias,
+        "quality": quality,
+    }
+
+
+def _synthetic_68_landmarks_from_bbox(
+    x: int,
+    y: int,
+    w: int,
+    h: int,
+    width: int,
+    height: int,
+    expression: dict | None = None,
+):
     """Generate dlib-like 68 points from detected face box as a robust fallback."""
     cx = x + w * 0.5
     cy = y + h * 0.55
@@ -1142,18 +1237,27 @@ def _synthetic_68_landmarks_from_bbox(x: int, y: int, w: int, h: int, width: int
         py = right_eye_cy + ry * 0.07 * np.sin(a)
         points.append(_clip_point(px, py, width, height))
 
+    expr = expression or {}
+    mouth_open = float(_clamp(float(expr.get("mouth_open", 0.30)), 0.05, 1.35))
+    mouth_width = float(_clamp(float(expr.get("mouth_width", 0.48)), 0.22, 1.0))
+    smile_bias = float(_clamp(float(expr.get("smile_bias", 0.0)), -0.9, 0.9))
+
     # Outer mouth: 48-59
     mouth_cx = cx
-    mouth_cy = cy + ry * 0.32
+    mouth_cy = cy + ry * (0.32 - 0.08 * smile_bias)
+    outer_rx = rx * (0.16 + 0.18 * mouth_width)
+    outer_ry = ry * (0.06 + 0.11 * mouth_open)
     for a in np.linspace(0, 2 * np.pi, 12, endpoint=False):
-        px = mouth_cx + rx * 0.24 * np.cos(a)
-        py = mouth_cy + ry * 0.12 * np.sin(a)
+        px = mouth_cx + outer_rx * np.cos(a)
+        py = mouth_cy + outer_ry * np.sin(a)
         points.append(_clip_point(px, py, width, height))
 
     # Inner mouth: 60-67
+    inner_rx = outer_rx * 0.62
+    inner_ry = outer_ry * 0.58
     for a in np.linspace(0, 2 * np.pi, 8, endpoint=False):
-        px = mouth_cx + rx * 0.15 * np.cos(a)
-        py = mouth_cy + ry * 0.07 * np.sin(a)
+        px = mouth_cx + inner_rx * np.cos(a)
+        py = mouth_cy + inner_ry * np.sin(a)
         points.append(_clip_point(px, py, width, height))
 
     return points[:68]
@@ -1190,7 +1294,8 @@ def _extract_landmarks_for_warp(image: np.ndarray):
     else:
         bx, by, bw, bh, _ = det
 
-    pts68 = _synthetic_68_landmarks_from_bbox(bx, by, bw, bh, w, h)
+    expr = _estimate_fallback_expression_cues(image, bx, by, bw, bh)
+    pts68 = _synthetic_68_landmarks_from_bbox(bx, by, bw, bh, w, h, expression=expr)
     pts = np.array([[float(x), float(y)] for x, y in pts68], dtype=np.float32)
     groups = {
         "mouth_left": [48],
@@ -1244,6 +1349,123 @@ def _build_dst_landmarks(src_points: np.ndarray, groups: dict, smile: float, bro
     dst[:, 0] = np.clip(dst[:, 0], 0, w - 1)
     dst[:, 1] = np.clip(dst[:, 1], 0, h - 1)
     return dst
+
+
+def _extract_landmarks_68_for_transfer(image: np.ndarray):
+    h, w = image.shape[:2]
+
+    if FACE_MESH is not None:
+        mp_points = _get_mediapipe_points(image)
+        if mp_points:
+            reduced = _reduce_mediapipe_to_68(mp_points)
+            if len(reduced) == 68:
+                pts = np.array([[float(p["x"]), float(p["y"])] for p in reduced], dtype=np.float32)
+                return pts, "mediapipe-68", 0.992
+
+    det = _detect_face_bbox(image)
+    if det is None:
+        bx, by, bw, bh = int(w * 0.18), int(h * 0.12), int(w * 0.64), int(h * 0.76)
+        confidence = 0.72
+        method = "fallback-geo-68"
+    else:
+        bx, by, bw, bh, det_method = det
+        confidence = 0.85 if det_method == "haar" else 0.78
+        method = f"fallback-{det_method}-68"
+
+    expr = _estimate_fallback_expression_cues(image, bx, by, bw, bh)
+    pts68 = _synthetic_68_landmarks_from_bbox(bx, by, bw, bh, w, h, expression=expr)
+    if float(expr.get("quality", 0.0)) > 0.08:
+        method = f"{method}-expr"
+        confidence = min(0.92, confidence + 0.05)
+    pts = np.array([[float(x), float(y)] for x, y in pts68], dtype=np.float32)
+    return pts, method, confidence
+
+
+def _affine_apply(points: np.ndarray, mat: np.ndarray):
+    if len(points) == 0:
+        return points.copy()
+    ones = np.ones((len(points), 1), dtype=np.float32)
+    hom = np.hstack([points.astype(np.float32), ones])
+    return (hom @ mat.T).astype(np.float32)
+
+
+def _build_reference_target_landmarks(
+    src68: np.ndarray,
+    ref68: np.ndarray,
+    strength: float,
+    mouth_weight: float,
+    brow_weight: float,
+    eye_weight: float,
+    jaw_weight: float,
+):
+    src_anchor = np.float32([src68[i] for i in LM68_EXPR_ANCHORS])
+    ref_anchor = np.float32([ref68[i] for i in LM68_EXPR_ANCHORS])
+    mat, _ = cv2.estimateAffinePartial2D(ref_anchor, src_anchor, method=cv2.LMEDS)
+    if mat is None:
+        raise ValueError("Could not align reference face landmarks.")
+
+    aligned_ref = _affine_apply(ref68, mat.astype(np.float32))
+    aligned_anchor = _affine_apply(ref_anchor, mat.astype(np.float32))
+    anchor_err = float(np.mean(np.linalg.norm(aligned_anchor - src_anchor, axis=1)))
+
+    delta = aligned_ref - src68
+    face_span = float(max(np.linalg.norm(src68[0] - src68[16]), 1.0))
+    max_shift = 0.32 * face_span
+
+    weights = np.zeros((68,), dtype=np.float32)
+    weights[LM68_REGION_MOUTH] = float(mouth_weight)
+    weights[LM68_REGION_BROW] = float(brow_weight)
+    weights[LM68_REGION_EYES] = float(eye_weight)
+    weights[LM68_REGION_NOSE] = float(eye_weight) * 0.32
+    weights[LM68_REGION_JAW] = float(jaw_weight)
+    weights = np.clip(weights, 0.0, 2.0)
+
+    for i in range(len(delta)):
+        mag = float(np.linalg.norm(delta[i]))
+        if mag > max_shift:
+            delta[i] *= max_shift / (mag + 1e-6)
+
+    dst68 = src68 + (float(strength) * weights[:, None] * delta)
+
+    expr_idx = sorted(set(LM68_REGION_MOUTH + LM68_REGION_BROW + LM68_REGION_EYES))
+    before_err = float(np.mean(np.linalg.norm(src68[expr_idx] - aligned_ref[expr_idx], axis=1)))
+    after_err = float(np.mean(np.linalg.norm(dst68[expr_idx] - aligned_ref[expr_idx], axis=1)))
+    expression_similarity = float(np.clip(1.0 - (after_err / (before_err + 1e-6)), 0.0, 1.0))
+
+    identity_idx = sorted(set(LM68_REGION_JAW + LM68_REGION_NOSE))
+    identity_shift = float(np.mean(np.linalg.norm(dst68[identity_idx] - src68[identity_idx], axis=1)))
+    identity_preservation = float(np.clip(1.0 - (identity_shift / (0.22 * face_span + 1e-6)), 0.0, 1.0))
+
+    reference_confidence = float(np.clip(1.0 - (anchor_err / (0.12 * face_span + 1e-6)), 0.0, 1.0))
+
+    return dst68.astype(np.float32), {
+        "referenceConfidence": round(reference_confidence * 100.0, 2),
+        "expressionSimilarity": round(expression_similarity * 100.0, 2),
+        "identityPreservation": round(identity_preservation * 100.0, 2),
+        "anchorErrorPx": round(anchor_err, 3),
+    }
+
+
+def _project_landmark_transfer_to_points(points: np.ndarray, src68: np.ndarray, dst68: np.ndarray, k_neighbors: int = 8):
+    if len(points) == 0:
+        return points.copy()
+
+    deltas = (dst68 - src68).astype(np.float32)
+    out = points.astype(np.float32).copy()
+    k = int(max(3, min(k_neighbors, len(src68))))
+
+    for i, p in enumerate(out):
+        diff = src68 - p
+        d2 = np.sum(diff * diff, axis=1)
+        idx = np.argpartition(d2, k - 1)[:k]
+        w = 1.0 / (d2[idx] + 1e-4)
+        w_sum = float(np.sum(w))
+        if w_sum <= 0:
+            continue
+        w = w / w_sum
+        out[i] = p + np.sum(deltas[idx] * w[:, None], axis=0)
+
+    return out
 
 
 def _add_boundary_points(points: np.ndarray, w: int, h: int):
@@ -1722,6 +1944,27 @@ def api_transform():
     except ValueError:
         return _error("Invalid slider values.", 400)
 
+    requested_mode = (request.form.get("mode", "slider_only") or "slider_only").strip().lower()
+    if requested_mode not in {"slider_only", "reference_only", "hybrid"}:
+        return _error("Invalid mode. Use slider_only, reference_only, or hybrid.", 400)
+
+    try:
+        reference_strength = float(request.form.get("referenceStrength", 0.75))
+        hybrid_blend = float(request.form.get("hybridBlend", 0.65))
+        ref_mouth_weight = float(request.form.get("refMouthWeight", 1.35))
+        ref_brow_weight = float(request.form.get("refBrowWeight", 1.1))
+        ref_eye_weight = float(request.form.get("refEyeWeight", 0.75))
+        ref_jaw_weight = float(request.form.get("refJawWeight", 0.22))
+    except ValueError:
+        return _error("Invalid reference transfer parameters.", 400)
+
+    reference_strength = _clamp(reference_strength, 0.0, 1.0)
+    hybrid_blend = _clamp(hybrid_blend, 0.0, 1.0)
+    ref_mouth_weight = _clamp(ref_mouth_weight, 0.0, 2.0)
+    ref_brow_weight = _clamp(ref_brow_weight, 0.0, 2.0)
+    ref_eye_weight = _clamp(ref_eye_weight, 0.0, 2.0)
+    ref_jaw_weight = _clamp(ref_jaw_weight, 0.0, 1.0)
+
     # Accept either [0..100] or normalized [0..1].
     def _norm(v: float) -> float:
         if abs(v) > 1.0:
@@ -1733,9 +1976,91 @@ def api_transform():
     lip = _norm(lip)
     slim = _norm(slim)
 
+    reference_image = None
+    reference_file = request.files.get("reference")
+    if reference_file is not None and reference_file.filename:
+        try:
+            reference_image = _read_image(reference_file)
+        except ValueError as exc:
+            return _error(f"Reference image: {exc}", 400)
+
+    transfer_mode = requested_mode
+    warnings = []
+    quality = {
+        "referenceConfidence": 0.0,
+        "expressionSimilarity": 0.0,
+        "identityPreservation": 100.0,
+    }
+    reference_meta = {
+        "sourceLandmarkMethod": None,
+        "referenceLandmarkMethod": None,
+        "sourceLandmarkConfidence": None,
+        "referenceLandmarkConfidence": None,
+        "anchorErrorPx": None,
+    }
+
+    if transfer_mode != "slider_only" and reference_image is None:
+        if requested_mode == "reference_only":
+            return _error("Reference image is required in Reference Only mode.", 400)
+        warnings.append("Reference image is missing; switched to slider_only mode.")
+        transfer_mode = "slider_only"
+
     h, w = image.shape[:2]
     src_pts, groups = _extract_landmarks_for_warp(image)
-    dst_pts = _build_dst_landmarks(src_pts, groups, smile, brow, lip, slim, w, h)
+    slider_dst_pts = _build_dst_landmarks(src_pts, groups, smile, brow, lip, slim, w, h)
+    dst_pts = slider_dst_pts.copy()
+
+    reference_used = False
+    if transfer_mode in {"reference_only", "hybrid"} and reference_image is not None:
+        try:
+            src68, src68_method, src68_conf = _extract_landmarks_68_for_transfer(image)
+            ref68, ref68_method, ref68_conf = _extract_landmarks_68_for_transfer(reference_image)
+
+            target68, ref_quality = _build_reference_target_landmarks(
+                src68=src68,
+                ref68=ref68,
+                strength=reference_strength,
+                mouth_weight=ref_mouth_weight,
+                brow_weight=ref_brow_weight,
+                eye_weight=ref_eye_weight,
+                jaw_weight=ref_jaw_weight,
+            )
+
+            reference_projected = _project_landmark_transfer_to_points(src_pts, src68, target68)
+            if transfer_mode == "reference_only":
+                dst_pts = reference_projected
+            else:
+                dst_pts = ((1.0 - hybrid_blend) * slider_dst_pts) + (hybrid_blend * reference_projected)
+
+            reference_used = True
+            quality = {
+                "referenceConfidence": float(ref_quality["referenceConfidence"]),
+                "expressionSimilarity": float(ref_quality["expressionSimilarity"]),
+                "identityPreservation": float(ref_quality["identityPreservation"]),
+            }
+            reference_meta = {
+                "sourceLandmarkMethod": src68_method,
+                "referenceLandmarkMethod": ref68_method,
+                "sourceLandmarkConfidence": round(float(src68_conf) * 100.0, 2),
+                "referenceLandmarkConfidence": round(float(ref68_conf) * 100.0, 2),
+                "anchorErrorPx": ref_quality["anchorErrorPx"],
+            }
+
+            if quality["referenceConfidence"] < 45.0:
+                warnings.append("Reference alignment confidence is low; result may look less stable.")
+        except Exception as exc:
+            if requested_mode == "reference_only":
+                print(f"Reference-only transfer failed: {exc}")
+                return _error(f"Reference transfer failed: {exc}", 400)
+
+            print(f"Reference transfer failed, falling back to slider_only: {exc}")
+            warnings.append("Reference transfer failed; switched to slider_only mode.")
+            transfer_mode = "slider_only"
+            reference_used = False
+            dst_pts = slider_dst_pts.copy()
+
+    dst_pts[:, 0] = np.clip(dst_pts[:, 0], 0, w - 1)
+    dst_pts[:, 1] = np.clip(dst_pts[:, 1], 0, h - 1)
 
     src_all = _add_boundary_points(src_pts, w, h)
     dst_all = _add_boundary_points(dst_pts, w, h)
@@ -1765,6 +2090,12 @@ def api_transform():
             "image": encoded,
             "width": int(w),
             "height": int(h),
+            "requestedMode": requested_mode,
+            "transferMode": transfer_mode,
+            "referenceUsed": reference_used,
+            "quality": quality,
+            "referenceMeta": reference_meta,
+            "warnings": warnings,
             "saved": saved,
             "durationMs": round(elapsed_ms, 2),
         }

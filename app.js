@@ -1159,6 +1159,28 @@ if ($('#btnResetExpr')) $('#btnResetExpr').addEventListener('click', () => {
     const s = $(`#${id}`), v = $(`#${valId}`);
     if (s) { s.value = 0; v.textContent = '0%'; s.style.setProperty('--pct', '0%'); }
   });
+  if (exprTransferMode) {
+    exprTransferMode.querySelectorAll('.seg-btn').forEach(b => b.classList.remove('active'));
+    exprTransferMode.querySelector('.seg-btn[data-mode="hybrid"]')?.classList.add('active');
+  }
+  if (sRefStrength && refStrengthVal) {
+    sRefStrength.value = 70;
+    sRefStrength.style.setProperty('--pct', '70%');
+    refStrengthVal.textContent = '70%';
+  }
+  if (referenceState.file || refInput?.files?.[0]) {
+    setReferenceStatus({
+      pill: 'Ready',
+      tone: 'ready',
+      text: 'Reference image loaded and ready for expression transfer.',
+    });
+  } else {
+    setReferenceStatus({
+      pill: 'Missing',
+      tone: 'warn',
+      text: 'Hybrid mode selected. Upload a reference image to activate transfer.',
+    });
+  }
   updateExprSvg();
 });
 
@@ -1288,6 +1310,68 @@ if ($('#btnCapture')) $('#btnCapture').addEventListener('click', () => {
 
 /* ═══════════════════ REFERENCE IMAGE (FR-3.8.1) ═══════════════════ */
 const refDrop = $('#refDrop'), refInput = $('#refInput'), refPreview = $('#refPreview'), refImg = $('#refImg');
+const refStatusPill = $('#refStatusPill'), refStatusText = $('#refStatusText');
+const exprTransferMode = $('#exprTransferMode');
+const sRefStrength = $('#sRefStrength'), refStrengthVal = $('#refStrengthVal');
+const referenceState = { file: null };
+
+function getSelectedTransferMode() {
+  return $('#exprTransferMode .seg-btn.active')?.dataset.mode || 'hybrid';
+}
+
+function setReferenceStatus({ pill = 'Inactive', tone = 'idle', text = '' } = {}) {
+  if (refStatusPill) {
+    refStatusPill.textContent = pill;
+    refStatusPill.classList.remove('ref-pill-idle', 'ref-pill-ready', 'ref-pill-active', 'ref-pill-warn');
+    const toneClass = {
+      idle: 'ref-pill-idle',
+      ready: 'ref-pill-ready',
+      active: 'ref-pill-active',
+      warn: 'ref-pill-warn',
+    }[tone] || 'ref-pill-idle';
+    refStatusPill.classList.add(toneClass);
+  }
+  if (refStatusText) {
+    refStatusText.textContent = text || 'No reference image selected. The system will use slider deformation.';
+  }
+}
+
+if (exprTransferMode) {
+  exprTransferMode.querySelectorAll('.seg-btn').forEach(btn => {
+    btn.addEventListener('click', () => {
+      exprTransferMode.querySelectorAll('.seg-btn').forEach(b => b.classList.remove('active'));
+      btn.classList.add('active');
+      const mode = getSelectedTransferMode();
+      if (mode === 'slider_only') {
+        setReferenceStatus({
+          pill: 'Slider Mode',
+          tone: 'idle',
+          text: 'Reference is disabled. Only manual sliders will drive expression warp.',
+        });
+      } else if (referenceState.file || refInput?.files?.[0]) {
+        setReferenceStatus({
+          pill: 'Ready',
+          tone: 'ready',
+          text: `Reference image is loaded and ${mode === 'hybrid' ? 'will blend with sliders' : 'will drive expression transfer'}.`,
+        });
+      } else {
+        setReferenceStatus({
+          pill: 'Missing',
+          tone: 'warn',
+          text: 'Select a reference image to use this mode. Otherwise system falls back to slider-only.',
+        });
+      }
+    });
+  });
+}
+
+if (sRefStrength && refStrengthVal) {
+  sRefStrength.addEventListener('input', () => {
+    refStrengthVal.textContent = `${sRefStrength.value}%`;
+    sRefStrength.style.setProperty('--pct', `${sRefStrength.value}%`);
+  });
+}
+
 if (refDrop) {
   refDrop.addEventListener('click', () => refInput.click());
   refDrop.addEventListener('dragover', e => { e.preventDefault(); refDrop.style.borderColor = 'rgba(139,92,246,.55)'; });
@@ -1300,19 +1384,49 @@ if (refDrop) {
 if (refInput) refInput.addEventListener('change', () => { if (refInput.files.length) loadRefImage(refInput.files[0]); });
 function loadRefImage(file) {
   if (!['image/jpeg', 'image/png'].includes(file.type)) { toast('Only JPG/PNG accepted.', 'error'); return; }
+  referenceState.file = file;
   const reader = new FileReader();
   reader.onload = e => {
     refImg.src = e.target.result;
     refDrop.style.display = 'none';
     refPreview.style.display = 'flex';
+    const mode = getSelectedTransferMode();
+    setReferenceStatus({
+      pill: mode === 'slider_only' ? 'Loaded' : 'Ready',
+      tone: mode === 'slider_only' ? 'ready' : 'active',
+      text: mode === 'slider_only'
+        ? 'Reference image loaded. Switch transfer mode to Hybrid or Reference Only to use it.'
+        : 'Reference image loaded and ready for expression transfer.',
+    });
   };
   reader.readAsDataURL(file);
 }
 if ($('#btnClearRef')) $('#btnClearRef').addEventListener('click', () => {
   refImg.src = '';
   refInput.value = '';
+  referenceState.file = null;
   refPreview.style.display = 'none';
   refDrop.style.display = 'flex';
+  const mode = getSelectedTransferMode();
+  if (mode === 'slider_only') {
+    setReferenceStatus({
+      pill: 'Slider Mode',
+      tone: 'idle',
+      text: 'Reference is disabled. Only manual sliders will drive expression warp.',
+    });
+  } else {
+    setReferenceStatus({
+      pill: 'Missing',
+      tone: 'warn',
+      text: 'Reference image was cleared. Upload a new one or switch to slider-only mode.',
+    });
+  }
+});
+
+setReferenceStatus({
+  pill: 'Inactive',
+  tone: 'idle',
+  text: 'No reference image selected. The system will use slider deformation.',
 });
 
 /* ═══════════════════ RADIO CARDS ═══════════════════ */
@@ -1575,10 +1689,43 @@ if ($('#btnApplyExpr')) $('#btnApplyExpr').addEventListener('click', async funct
     fd.append('lip', String(Number($('#sLip')?.value || 0)));
     fd.append('slim', String(Number($('#sSlim')?.value || 0)));
 
+    const selectedMode = getSelectedTransferMode();
+    const refFile = refInput?.files?.[0] || referenceState.file;
+    let effectiveMode = selectedMode;
+    if (selectedMode !== 'slider_only' && !refFile) {
+      effectiveMode = 'slider_only';
+      setReferenceStatus({
+        pill: 'Missing',
+        tone: 'warn',
+        text: 'Reference mode requested but no image selected. Request was sent in slider-only mode.',
+      });
+      toast('Reference image missing. Falling back to slider-only mode.', 'warning');
+    }
+
+    const refStrength = Number($('#sRefStrength')?.value || 70) / 100;
+    const hybridBlend = Math.min(1, Math.max(0, 0.35 + (refStrength * 0.65)));
+    fd.append('mode', effectiveMode);
+    fd.append('referenceStrength', String(refStrength));
+    fd.append('hybridBlend', String(hybridBlend));
+    if (refFile && effectiveMode !== 'slider_only') {
+      fd.append('reference', refFile, refFile.name || 'reference.jpg');
+    }
+
     const res = await fetch('/api/transform', { method: 'POST', body: fd });
     const data = await res.json();
     if (!res.ok || !data.ok || !data.image) {
       throw new Error(data.error || 'Expression transform failed.');
+    }
+
+    const hasReferenceMeta = Object.prototype.hasOwnProperty.call(data, 'transferMode')
+      && Object.prototype.hasOwnProperty.call(data, 'referenceUsed');
+    if (!hasReferenceMeta && effectiveMode !== 'slider_only') {
+      setReferenceStatus({
+        pill: 'Backend Outdated',
+        tone: 'warn',
+        text: 'Server response is missing reference metadata. Restart backend and hard-refresh browser (Ctrl+F5).',
+      });
+      toast('Backend update not active yet. Restart server and refresh page (Ctrl+F5).', 'warning');
     }
 
     const outUrl = `data:image/jpeg;base64,${data.image}`;
@@ -1587,9 +1734,41 @@ if ($('#btnApplyExpr')) $('#btnApplyExpr').addEventListener('click', async funct
     backendState.analysisLoaded = false;
     backendState.analysisData = null;
     renderExpressionCanvasFromDataUrl(outUrl);
-    toast(`Expression transform complete (${data.durationMs || 0} ms).`, 'success');
+
+    const transferMode = data.transferMode || 'slider_only';
+    const quality = data.quality || {};
+    const qRef = Number(quality.referenceConfidence || 0).toFixed(1);
+    const qExpr = Number(quality.expressionSimilarity || 0).toFixed(1);
+    const qId = Number(quality.identityPreservation || 0).toFixed(1);
+
+    if (data.referenceUsed) {
+      setReferenceStatus({
+        pill: transferMode === 'hybrid' ? 'Hybrid Active' : 'Reference Active',
+        tone: 'active',
+        text: `Mode: ${transferMode}. Ref confidence ${qRef}%, expression match ${qExpr}%, identity preserve ${qId}%.`,
+      });
+    } else if (transferMode === 'slider_only') {
+      const warningText = (Array.isArray(data.warnings) && data.warnings.length)
+        ? ` ${data.warnings[0]}`
+        : '';
+      setReferenceStatus({
+        pill: 'Slider Mode',
+        tone: 'idle',
+        text: `Result generated with slider-only deformation.${warningText}`,
+      });
+    }
+
+    if (Array.isArray(data.warnings) && data.warnings.length > 0) {
+      toast(data.warnings[0], 'warning');
+    }
+    toast(`Expression transform complete (${data.durationMs || 0} ms · ${transferMode}).`, 'success');
   } catch (err) {
     toast(`Expression transform error: ${err.message}`, 'error');
+    setReferenceStatus({
+      pill: 'Error',
+      tone: 'warn',
+      text: `Expression transfer failed: ${err.message}`,
+    });
   } finally {
     btn.disabled = false;
     btn.innerHTML = prevText;
