@@ -368,7 +368,7 @@ function applyLandmarksToSvg(points68, meshPoints = points68) {
   renderLandmarkMesh(meshNodes);
 
   // Helper: build SVG point-list string from landmark indices
-  const pt  = i => (mx[i] !== undefined) ? `${mx[i].toFixed(1)},${my[i].toFixed(1)}` : null;
+  const pt = i => (mx[i] !== undefined) ? `${mx[i].toFixed(1)},${my[i].toFixed(1)}` : null;
   const pts = (...idx) => idx.map(pt).filter(Boolean).join(' ');
 
   // ── Rebuild connection paths ──────────────────────────────────
@@ -387,8 +387,8 @@ function applyLandmarksToSvg(points68, meshPoints = points68) {
   if (eyeEls[1]) eyeEls[1].setAttribute('points', pts(42, 43, 44, 45, 46, 47));
 
   // Nose: bridge polyline 27–30, bottom polyline 31–35, 2 lateral lines
-  const noseEls   = Array.from($$('#connG [data-region="nose"]'));
-  const nosePoly  = noseEls.filter(el => el.tagName.toLowerCase() !== 'line');
+  const noseEls = Array.from($$('#connG [data-region="nose"]'));
+  const nosePoly = noseEls.filter(el => el.tagName.toLowerCase() !== 'line');
   const noseLines = noseEls.filter(el => el.tagName.toLowerCase() === 'line');
   if (nosePoly[0]) nosePoly[0].setAttribute('points', pts(27, 28, 29, 30));
   if (nosePoly[1]) nosePoly[1].setAttribute('points', pts(31, 32, 33, 34, 35));
@@ -408,21 +408,21 @@ function applyLandmarksToSvg(points68, meshPoints = points68) {
 }
 
 function applyLandmarkStatsUI(data) {
-  const n    = data.pointCount;
+  const n = data.pointCount;
   const conf = Number(data.confidence || 85);
-  const ms   = Math.round(data.durationMs);
+  const ms = Math.round(data.durationMs);
   const backendLabel = mapLandmarkMethodLabel(data.method, conf);
 
-  if ($('#lmPtsCount'))    $('#lmPtsCount').textContent    = n;
-  if ($('#lmLatencyVal'))  $('#lmLatencyVal').textContent  = ms + 'ms';
-  if ($('#lmConfText'))    $('#lmConfText').textContent    = conf.toFixed(1);
-  if ($('#lmConfBadge'))   $('#lmConfBadge').textContent   = conf.toFixed(1) + '%';
-  if ($('#lmStatPts'))     $('#lmStatPts').textContent     = n;
-  if ($('#lmStatConf'))    $('#lmStatConf').textContent    = conf.toFixed(1) + '%';
+  if ($('#lmPtsCount')) $('#lmPtsCount').textContent = n;
+  if ($('#lmLatencyVal')) $('#lmLatencyVal').textContent = ms + 'ms';
+  if ($('#lmConfText')) $('#lmConfText').textContent = conf.toFixed(1);
+  if ($('#lmConfBadge')) $('#lmConfBadge').textContent = conf.toFixed(1) + '%';
+  if ($('#lmStatPts')) $('#lmStatPts').textContent = n;
+  if ($('#lmStatConf')) $('#lmStatConf').textContent = conf.toFixed(1) + '%';
   if ($('#lmStatBackend')) $('#lmStatBackend').textContent = backendLabel;
-  if ($('#lmStatusText'))  $('#lmStatusText').textContent  = `Detection complete · ${n}/${n} pts`;
+  if ($('#lmStatusText')) $('#lmStatusText').textContent = `Detection complete · ${n}/${n} pts`;
 
-  const circ    = 251.3;
+  const circ = 251.3;
   const fillLen = ((circ * conf) / 100).toFixed(1);
   if ($('#lmAccRing')) $('#lmAccRing').setAttribute('stroke-dasharray', `${fillLen} ${circ}`);
 }
@@ -478,7 +478,7 @@ async function fetchLandmarksFromBackend(force = false) {
     applyLandmarkStatsUI(data);
 
     const conf = Number(data.confidence || 85);
-    const ms   = Math.round(data.durationMs);
+    const ms = Math.round(data.durationMs);
     const backendLabel = mapLandmarkMethodLabel(data.method, conf);
     toast(`Landmarks: ${data.pointCount} pts · ${conf}% conf · ${ms} ms (${backendLabel})`, 'success');
   } catch (err) {
@@ -796,7 +796,7 @@ function setPipelineImage(dataUrl, meta = {}) {
 /* ── Aging page: inject photo into Before/After panels ── */
 function syncAgingPhotoPanels() {
   const beforeWrap = document.querySelector('#page-aging .aging-side-card:not(.aging-side-card-active) .aging-face-wrap');
-  const afterWrap  = document.querySelector('#page-aging .aging-side-card.aging-side-card-active .aging-face-wrap');
+  const afterWrap = document.querySelector('#page-aging .aging-side-card.aging-side-card-active .aging-face-wrap');
   if (!beforeWrap || !afterWrap) return;
 
   const setup = (wrap, id) => {
@@ -814,7 +814,7 @@ function syncAgingPhotoPanels() {
   };
 
   const beforeImg = setup(beforeWrap, 'agingBeforeImg');
-  const afterImg  = setup(afterWrap,  'agingAfterImg');
+  const afterImg = setup(afterWrap, 'agingAfterImg');
   const beforeUrl = backendState.lastExprDataUrl || appState.imageDataUrl;
   const afterUrl = backendState.lastAgingDataUrl;
 
@@ -834,7 +834,7 @@ function syncAgingPhotoPanels() {
     });
   } else {
     beforeImg.style.display = 'none';
-    afterImg.style.display  = 'none';
+    afterImg.style.display = 'none';
     $$('#page-aging .aging-face-wrap .face-svg').forEach(s => { s.style.display = ''; s.style.opacity = ''; s.style.zIndex = ''; });
   }
 }
@@ -925,9 +925,9 @@ function renderExpressionCanvasFromDataUrl(dataUrl) {
   const tmpImg = new Image();
   tmpImg.onload = () => {
     const rect = canvas.getBoundingClientRect();
-    const W = Math.round(rect.width)  || 400;
+    const W = Math.round(rect.width) || 400;
     const H = Math.round(rect.height) || 400;
-    if (canvas.width !== W)  canvas.width  = W;
+    if (canvas.width !== W) canvas.width = W;
     if (canvas.height !== H) canvas.height = H;
 
     const ctx = canvas.getContext('2d');
@@ -947,10 +947,10 @@ function renderExpressionCanvasFromDataUrl(dataUrl) {
 function syncExpressionPhotoPanels() {
   ensureExpressionPhotoElements();
 
-  const originalImg    = $('#exprOriginalImg');
+  const originalImg = $('#exprOriginalImg');
   const transformedCvs = $('#exprTransformedCanvas');
   const hasImage = Boolean(appState.imageDataUrl);
-  const originalSvg    = $('#page-expression .comp-card .face-svg');
+  const originalSvg = $('#page-expression .comp-card .face-svg');
   const transformedSvg = $('#exprSvg');
 
   if (!originalImg || !transformedCvs) return;
@@ -959,15 +959,15 @@ function syncExpressionPhotoPanels() {
     originalImg.src = appState.imageDataUrl;
     originalImg.style.display = 'block';
     transformedCvs.style.display = 'block';
-    if (originalSvg)    originalSvg.style.display    = 'none';
+    if (originalSvg) originalSvg.style.display = 'none';
     if (transformedSvg) transformedSvg.style.display = 'none';
     renderExpressionCanvasFromDataUrl(backendState.lastExprDataUrl || appState.imageDataUrl);
     return;
   }
 
-  originalImg.style.display    = 'none';
+  originalImg.style.display = 'none';
   transformedCvs.style.display = 'none';
-  if (originalSvg)    originalSvg.style.display    = 'block';
+  if (originalSvg) originalSvg.style.display = 'block';
   if (transformedSvg) transformedSvg.style.display = 'block';
 }
 
@@ -1056,10 +1056,10 @@ if (segRegion) {
       $$('#ptsG circle').forEach(c => {
         const idx = Number(c.getAttribute('data-idx'));
         const show = val === 'all'
-          || (val === 'jaw'   && idx <= 16)
-          || (val === 'brow'  && idx >= 17 && idx <= 26)
-          || (val === 'nose'  && idx >= 27 && idx <= 35)
-          || (val === 'eyes'  && idx >= 36 && idx <= 47)
+          || (val === 'jaw' && idx <= 16)
+          || (val === 'brow' && idx >= 17 && idx <= 26)
+          || (val === 'nose' && idx >= 27 && idx <= 35)
+          || (val === 'eyes' && idx >= 36 && idx <= 47)
           || (val === 'mouth' && idx >= 48);
         c.style.display = show ? '' : 'none';
       });
@@ -1097,12 +1097,12 @@ const lmCanvasEl = document.querySelector('.lm-canvas');
 if (lmCanvasEl) {
   lmCanvasEl.addEventListener('mousemove', e => {
     const rect = lmCanvasEl.getBoundingClientRect();
-    const svg  = $('#lmSvg');
-    const vb   = svg?.viewBox?.baseVal;
-    const vbW  = vb?.width  || 300;
-    const vbH  = vb?.height || 290;
-    const rx = ((e.clientX - rect.left)  / rect.width)  * vbW;
-    const ry = ((e.clientY - rect.top)   / rect.height) * vbH;
+    const svg = $('#lmSvg');
+    const vb = svg?.viewBox?.baseVal;
+    const vbW = vb?.width || 300;
+    const vbH = vb?.height || 290;
+    const rx = ((e.clientX - rect.left) / rect.width) * vbW;
+    const ry = ((e.clientY - rect.top) / rect.height) * vbH;
     const coord = $('#lmCoordDisplay');
     if (coord) coord.textContent = `x: ${rx.toFixed(0)}   y: ${ry.toFixed(0)}`;
   });
@@ -1144,7 +1144,7 @@ function updateExprSvg() {
   const browL = $('#exBrowL'), browR = $('#exBrowR');
   if (browL) {
     const by = 102 - brow * 30;
-    const cy = 95  - brow * 30;
+    const cy = 95 - brow * 30;
     browL.setAttribute('d', `M72 ${by} Q80 ${cy} 92 ${by}`);
     browR.setAttribute('d', `M108 ${by} Q120 ${cy} 128 ${by}`);
   }
@@ -1258,13 +1258,13 @@ function startLiveMode() {
   _liveTimer = setInterval(async () => {
     if (_liveProcessing || !webcamVideo || !webcamCanvas || !webcamStream) return;
     const smile = Number($('#sSmile')?.value || 0);
-    const brow  = Number($('#sBrow')?.value  || 0);
-    const lip   = Number($('#sLip')?.value   || 0);
-    const slim  = Number($('#sSlim')?.value  || 0);
+    const brow = Number($('#sBrow')?.value || 0);
+    const lip = Number($('#sLip')?.value || 0);
+    const slim = Number($('#sSlim')?.value || 0);
     if (smile === 0 && brow === 0 && lip === 0 && slim === 0) return;
     _liveProcessing = true;
     try {
-      webcamCanvas.width  = webcamVideo.videoWidth  || 640;
+      webcamCanvas.width = webcamVideo.videoWidth || 640;
       webcamCanvas.height = webcamVideo.videoHeight || 480;
       webcamCanvas.getContext('2d').drawImage(webcamVideo, 0, 0);
       const frameBlob = dataUrlToBlob(webcamCanvas.toDataURL('image/jpeg', 0.75));
@@ -1272,10 +1272,10 @@ function startLiveMode() {
       const fd = new FormData();
       fd.append('image', frameBlob, 'live-frame.jpg');
       fd.append('smile', String(smile));
-      fd.append('brow',  String(brow));
-      fd.append('lip',   String(lip));
-      fd.append('slim',  String(slim));
-      fd.append('mode',  'delaunay');
+      fd.append('brow', String(brow));
+      fd.append('lip', String(lip));
+      fd.append('slim', String(slim));
+      fd.append('mode', 'delaunay');
       const res = await fetch('/api/transform', { method: 'POST', body: fd });
       const data = await res.json();
       if (data.ok && data.image && liveOutput) {
@@ -1445,10 +1445,10 @@ if ($('#btnRunPP')) $('#btnRunPP').addEventListener('click', async function () {
     const grayscale = Boolean($('#radioGray')?.classList.contains('active-radio'));
     // Extra controls — send all UI values to backend
     const confidence = Number($('#sliderConf')?.value || 85) / 100;
-    const padding    = Number($('#sliderPad')?.value  || 20);
-    const normVal    = $('#segNorm .seg-btn.active')?.dataset.val   || '1';
-    const interpVal  = $('#segInterp .seg-btn.active')?.dataset.val || 'bicubic';
-    const detectorVal= $('#segDetector .seg-btn.active')?.dataset.val || 'hog';
+    const padding = Number($('#sliderPad')?.value || 20);
+    const normVal = $('#segNorm .seg-btn.active')?.dataset.val || '1';
+    const interpVal = $('#segInterp .seg-btn.active')?.dataset.val || 'bicubic';
+    const detectorVal = $('#segDetector .seg-btn.active')?.dataset.val || 'hog';
     const fd = new FormData();
     fd.append('image', blob, appState.fileName || 'input.jpg');
     fd.append('size', String(size));
@@ -1466,11 +1466,11 @@ if ($('#btnRunPP')) $('#btnRunPP').addEventListener('click', async function () {
     const sizeLabel = `${data.width}×${data.height}`;
     const colorLabel = data.grayscale ? 'Gray' : 'RGB';
     const normLabel = normVal === '255' ? '0 – 255' : normVal === 'bipolar' ? '−1 – 1' : '0 – 1';
-    if ($('#ppOutSize'))  $('#ppOutSize').textContent  = sizeLabel;
-    if ($('#ppOutNorm'))  $('#ppOutNorm').textContent  = normLabel;
+    if ($('#ppOutSize')) $('#ppOutSize').textContent = sizeLabel;
+    if ($('#ppOutNorm')) $('#ppOutNorm').textContent = normLabel;
     if ($('#ppOutColor')) $('#ppOutColor').textContent = colorLabel;
-    if ($('#ppStatRes'))  $('#ppStatRes').textContent  = sizeLabel;
-    if ($('#ppStatColor'))$('#ppStatColor').textContent = colorLabel;
+    if ($('#ppStatRes')) $('#ppStatRes').textContent = sizeLabel;
+    if ($('#ppStatColor')) $('#ppStatColor').textContent = colorLabel;
 
     // ── Show result image in the hero face wrap ──
     if (data.saved) {
@@ -1558,10 +1558,10 @@ if ($('#btnResetPP')) $('#btnResetPP').addEventListener('click', () => {
   // Remove result image overlay
   document.querySelector('#page-preprocess #ppResultImg')?.remove();
   // Reset stat labels
-  if ($('#ppOutSize'))   $('#ppOutSize').textContent   = '256×256';
-  if ($('#ppOutNorm'))   $('#ppOutNorm').textContent   = '0 – 1';
-  if ($('#ppOutColor'))  $('#ppOutColor').textContent  = 'RGB';
-  if ($('#ppStatRes'))   $('#ppStatRes').textContent   = '256×256';
+  if ($('#ppOutSize')) $('#ppOutSize').textContent = '256×256';
+  if ($('#ppOutNorm')) $('#ppOutNorm').textContent = '0 – 1';
+  if ($('#ppOutColor')) $('#ppOutColor').textContent = 'RGB';
+  if ($('#ppStatRes')) $('#ppStatRes').textContent = '256×256';
   if ($('#ppStatColor')) $('#ppStatColor').textContent = 'RGB';
   toast('Preprocessing controls reset.', 'info');
 });
@@ -1754,7 +1754,7 @@ if ($('#btnApplyExpr')) $('#btnApplyExpr').addEventListener('click', async funct
     fd.append('brow', String(Number($('#sBrow')?.value || 0)));
     fd.append('lip', String(Number($('#sLip')?.value || 0)));
     fd.append('slim', String(Number($('#sSlim')?.value || 0)));
-    fd.append('mode', 'delaunay');
+    fd.append('mode', $('#sWarpMethod')?.value || 'delaunay');
     fd.append('interpolation', 'bicubic');
     fd.append('debug', 'false');
 
