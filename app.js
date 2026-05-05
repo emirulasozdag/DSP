@@ -1132,6 +1132,93 @@ sliders.forEach(({ id, valId }) => {
   });
 });
 
+/* ═══════════════════ SMOOTH ACCORDION ═══════════════════ */
+function initAccordions() {
+  document.querySelectorAll('details.acc-section').forEach(details => {
+    const summary = details.querySelector('summary');
+    const body = details.querySelector('.acc-body');
+    if (!summary || !body) return;
+
+    // Prevent double-fire on repeat init
+    if (summary._accBound) return;
+    summary._accBound = true;
+
+    summary.addEventListener('click', e => {
+      e.preventDefault();
+      if (!details.open) {
+        // ── Opening ───────────────────────────────────
+        details.open = true;
+        body.style.overflow = 'hidden';
+        body.style.maxHeight = '0px';
+        body.style.opacity = '0';
+        body.style.transition = 'max-height 0.32s ease-in-out, opacity 0.28s ease-in-out';
+        requestAnimationFrame(() => requestAnimationFrame(() => {
+          body.style.maxHeight = body.scrollHeight + 'px';
+          body.style.opacity = '1';
+        }));
+        setTimeout(() => {
+          body.style.maxHeight = '';
+          body.style.overflow = '';
+          body.style.transition = '';
+        }, 340);
+      } else {
+        // ── Closing ───────────────────────────────────
+        body.style.maxHeight = body.scrollHeight + 'px';
+        body.style.overflow = 'hidden';
+        body.style.transition = 'max-height 0.28s ease-in-out, opacity 0.22s ease-in-out';
+        body.style.opacity = '1';
+        requestAnimationFrame(() => requestAnimationFrame(() => {
+          body.style.maxHeight = '0px';
+          body.style.opacity = '0';
+        }));
+        setTimeout(() => {
+          details.open = false;
+          body.style.maxHeight = '';
+          body.style.overflow = '';
+          body.style.opacity = '';
+          body.style.transition = '';
+        }, 300);
+      }
+    });
+  });
+}
+initAccordions();
+
+/* ═══════════════════ TECHNICAL METRICS PANEL ═══════════════════ */
+function updateExprMetrics(data) {
+  // Reset all cards before updating
+  ['mcDuration', 'mcMoved', 'mcMaxD', 'mcTri', 'mcMethod'].forEach(id => {
+    const el = document.getElementById(id);
+    if (el) el.classList.remove('has-data');
+  });
+
+  const setM = (valId, cardId, val) => {
+    const el = document.getElementById(valId);
+    const card = document.getElementById(cardId);
+    if (el) el.textContent = val;
+    if (card && val !== '—') card.classList.add('has-data');
+  };
+  setM('mcDurationVal', 'mcDuration', data.durationMs != null ? data.durationMs + ' ms' : '—');
+  setM('mcMovedVal', 'mcMoved', data.movedPoints != null ? String(data.movedPoints) : '—');
+  setM('mcMaxDVal', 'mcMaxD', data.maxDisplacement != null ? Number(data.maxDisplacement).toFixed(1) + 'px' : '—');
+  setM('mcTriVal', 'mcTri', data.triangleCount != null ? String(data.triangleCount) : '—');
+  setM('mcMethodVal', 'mcMethod', data.method ? data.method.toUpperCase() : '—');
+
+  const stream = document.getElementById('exprLiveStream');
+  if (stream) {
+    // Remove placeholder row if present
+    const placeholder = stream.querySelector('.ls-row .ls-ts');
+    if (placeholder && placeholder.textContent === '—') stream.innerHTML = '';
+    const now = new Date().toLocaleTimeString('en-US', { hour12: false, hour: '2-digit', minute: '2-digit', second: '2-digit' });
+    const row = document.createElement('div');
+    row.className = 'ls-row';
+    const volFlag = data.facialVolumeApplied ? ' \xb7vol' : '';
+    row.innerHTML = `<span class="ls-ts">${now}</span><span class="ls-val">moved=${data.movedPoints ?? '?'} maxD=${data.maxDisplacement != null ? Number(data.maxDisplacement).toFixed(1) : '?'}px${volFlag} [${(data.method || '?').slice(0, 3).toUpperCase()}]</span>`;
+    stream.insertBefore(row, stream.firstChild);
+    while (stream.children.length > 18) stream.removeChild(stream.lastChild);
+  }
+}
+
 function updateExprSvg() {
   const smile = (+$('#sSmile')?.value || 0) / 100;
   const brow = (+$('#sBrow')?.value || 0) / 100;
@@ -1847,6 +1934,7 @@ if ($('#btnApplyExpr')) $('#btnApplyExpr').addEventListener('click', async funct
     backendState.analysisData = null;
     backendState.analysisSpectra = null;
     renderExpressionCanvasFromDataUrl(outUrl);
+    updateExprMetrics(data);
     const volumeTag = data.facialVolumeApplied ? ' · Facial Volume (Non-Linear)' : '';
     toast(`Warped · ${data.method || 'delaunay'} · ${data.usedLandmarkCount ?? '?'} pts · moved ${data.movedPoints ?? '?'}${volumeTag} · maxD ${data.maxDisplacement != null ? Number(data.maxDisplacement).toFixed(1) : '?'} · ${data.triangleCount ?? '?'} tri · ${data.durationMs || 0} ms`, 'success');
   } catch (err) {

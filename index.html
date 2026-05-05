@@ -1204,7 +1204,6 @@
 
       <div class="page-nav">
         <button class="btn btn-ghost" onclick="nav('preprocess')">&#x2190; Back to Preprocessing</button>
-        <button class="btn btn-primary" onclick="nav('expression')">Expression Warping &#x2192;</button>
       </div>
 
     </div>
@@ -1266,158 +1265,199 @@
             </div>
           </div>
 
-          <!-- Smile Enhancement -->
-          <div class="param-ctrl">
-            <div class="param-header">
-              <div class="param-icon-wrap">
-                <svg viewBox="0 0 32 32" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"
-                  stroke-linejoin="round">
-                  <ellipse cx="16" cy="16" rx="11" ry="12" stroke-opacity=".25" />
-                  <path d="M10 19 Q16 25 22 19" />
-                  <path d="M10 19 L9 16" stroke-opacity=".5" />
-                  <path d="M22 19 L23 16" stroke-opacity=".5" />
-                </svg>
+          <!-- ── Accordion: Facial Expressions ───────────────────── -->
+          <details class="acc-section" open>
+            <summary>
+              <svg class="acc-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
+                stroke-linecap="round" stroke-linejoin="round">
+                <path d="M8 14s1.5 2 4 2 4-2 4-2" />
+                <line x1="9" y1="9" x2="9.01" y2="9" />
+                <line x1="15" y1="9" x2="15.01" y2="9" />
+                <circle cx="12" cy="12" r="10" />
+              </svg>
+              Facial Expressions
+              <span class="acc-badge">2</span>
+            </summary>
+            <div class="acc-body">
+              <div class="param-ctrl">
+                <div class="param-header">
+                  <div class="param-icon-wrap">
+                    <svg viewBox="0 0 32 32" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"
+                      stroke-linejoin="round">
+                      <ellipse cx="16" cy="16" rx="11" ry="12" stroke-opacity=".25" />
+                      <path d="M10 19 Q16 25 22 19" />
+                      <path d="M10 19 L9 16" stroke-opacity=".5" />
+                      <path d="M22 19 L23 16" stroke-opacity=".5" />
+                    </svg>
+                  </div>
+                  <div class="param-info">
+                    <span class="param-name">Smile Enhancement</span>
+                    <span class="param-micro">Corner elevation &middot; jaw anchors</span>
+                  </div>
+                  <span class="param-val" id="vSmile">0%</span>
+                </div>
+                <div class="param-track-wrap">
+                  <input type="range" min="0" max="100" value="0" class="param-slider" id="sSmile" style="--pct:0%" />
+                  <div class="param-tick-row">
+                    <span>0</span><span>25</span><span>50</span><span>75</span><span>100</span>
+                  </div>
+                </div>
               </div>
-              <div class="param-info">
-                <span class="param-name">Smile Enhancement</span>
-                <span class="param-micro">Corner elevation &middot; jaw anchors</span>
+              <div class="param-ctrl">
+                <div class="param-header">
+                  <div class="param-icon-wrap">
+                    <svg viewBox="0 0 32 32" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"
+                      stroke-linejoin="round">
+                      <path d="M12 18 Q16 23 20 18" stroke-opacity=".25" />
+                      <path d="M12 18 Q16 14 20 18" />
+                      <path d="M8 18 L4 18 M5 16 L4 18 L5 20" stroke-opacity=".6" />
+                      <path d="M24 18 L28 18 M27 16 L28 18 L27 20" stroke-opacity=".6" />
+                    </svg>
+                  </div>
+                  <div class="param-info">
+                    <span class="param-name">Lip Widening</span>
+                    <span class="param-micro">Lateral expansion &middot; mouth corners</span>
+                  </div>
+                  <span class="param-val" id="vLip">0%</span>
+                </div>
+                <div class="param-track-wrap">
+                  <input type="range" min="0" max="100" value="0" class="param-slider" id="sLip" style="--pct:0%" />
+                  <div class="param-tick-row">
+                    <span>0</span><span>25</span><span>50</span><span>75</span><span>100</span>
+                  </div>
+                </div>
               </div>
-              <span class="param-val" id="vSmile">0%</span>
             </div>
-            <div class="param-track-wrap">
-              <input type="range" min="0" max="100" value="0" class="param-slider" id="sSmile" style="--pct:0%" />
-              <div class="param-tick-row"><span>0</span><span>25</span><span>50</span><span>75</span><span>100</span>
-              </div>
-            </div>
-          </div>
+          </details>
 
-          <!-- Eyebrow Raise -->
-          <div class="param-ctrl">
-            <div class="param-header">
-              <div class="param-icon-wrap">
-                <svg viewBox="0 0 32 32" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"
-                  stroke-linejoin="round">
-                  <path d="M7 20 Q11 14 16 16 Q21 14 25 20" stroke-opacity=".25" />
-                  <path d="M9 17 Q13 11 16 13 Q19 11 23 17" />
-                  <path d="M12 14 L12 10 M11 11 L12 10 L13 11" stroke-opacity=".6" />
-                  <path d="M20 14 L20 10 M19 11 L20 10 L21 11" stroke-opacity=".6" />
-                </svg>
+          <!-- ── Accordion: Ocular & Brow ──────────────────────────── -->
+          <details class="acc-section" open>
+            <summary>
+              <svg class="acc-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
+                stroke-linecap="round" stroke-linejoin="round">
+                <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z" />
+                <circle cx="12" cy="12" r="3" />
+              </svg>
+              Ocular &amp; Brow
+              <span class="acc-badge">2</span>
+            </summary>
+            <div class="acc-body">
+              <div class="param-ctrl">
+                <div class="param-header">
+                  <div class="param-icon-wrap">
+                    <svg viewBox="0 0 32 32" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"
+                      stroke-linejoin="round">
+                      <path d="M7 20 Q11 14 16 16 Q21 14 25 20" stroke-opacity=".25" />
+                      <path d="M9 17 Q13 11 16 13 Q19 11 23 17" />
+                      <path d="M12 14 L12 10 M11 11 L12 10 L13 11" stroke-opacity=".6" />
+                      <path d="M20 14 L20 10 M19 11 L20 10 L21 11" stroke-opacity=".6" />
+                    </svg>
+                  </div>
+                  <div class="param-info">
+                    <span class="param-name">Eyebrow Raise</span>
+                    <span class="param-micro">Superior displacement &middot; brow mesh</span>
+                  </div>
+                  <span class="param-val" id="vBrow">0%</span>
+                </div>
+                <div class="param-track-wrap">
+                  <input type="range" min="0" max="100" value="0" class="param-slider" id="sBrow" style="--pct:0%" />
+                  <div class="param-tick-row">
+                    <span>0</span><span>25</span><span>50</span><span>75</span><span>100</span>
+                  </div>
+                </div>
               </div>
-              <div class="param-info">
-                <span class="param-name">Eyebrow Raise</span>
-                <span class="param-micro">Superior displacement &middot; brow mesh</span>
+              <div class="param-ctrl">
+                <div class="param-header">
+                  <div class="param-icon-wrap">
+                    <svg viewBox="0 0 32 32" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"
+                      stroke-linejoin="round">
+                      <ellipse cx="10" cy="16" rx="6" ry="4" />
+                      <ellipse cx="22" cy="16" rx="6" ry="4" />
+                      <circle cx="10" cy="16" r="2.2" fill="currentColor" stroke="none" opacity=".55" />
+                      <circle cx="22" cy="16" r="2.2" fill="currentColor" stroke="none" opacity=".55" />
+                      <path d="M4 16 Q10 9 16 16 Q22 9 28 16" stroke-opacity=".3" stroke-dasharray="2 2" />
+                    </svg>
+                  </div>
+                  <div class="param-info">
+                    <span class="param-name">Big Eyes</span>
+                    <span class="param-micro">Iris radial expansion &middot; brow &amp; nose locked</span>
+                  </div>
+                  <span class="param-val" id="vEyeSize">0%</span>
+                </div>
+                <div class="param-track-wrap">
+                  <input type="range" min="0" max="100" value="0" class="param-slider" id="sEyeSize" style="--pct:0%" />
+                  <div class="param-tick-row">
+                    <span>0</span><span>25</span><span>50</span><span>75</span><span>100</span>
+                  </div>
+                </div>
               </div>
-              <span class="param-val" id="vBrow">0%</span>
             </div>
-            <div class="param-track-wrap">
-              <input type="range" min="0" max="100" value="0" class="param-slider" id="sBrow" style="--pct:0%" />
-              <div class="param-tick-row"><span>0</span><span>25</span><span>50</span><span>75</span><span>100</span>
-              </div>
-            </div>
-          </div>
+          </details>
 
-          <!-- Lip Widening -->
-          <div class="param-ctrl">
-            <div class="param-header">
-              <div class="param-icon-wrap">
-                <svg viewBox="0 0 32 32" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"
-                  stroke-linejoin="round">
-                  <path d="M12 18 Q16 23 20 18" stroke-opacity=".25" />
-                  <path d="M12 18 Q16 14 20 18" />
-                  <path d="M8 18 L4 18 M5 16 L4 18 L5 20" stroke-opacity=".6" />
-                  <path d="M24 18 L28 18 M27 16 L28 18 L27 20" stroke-opacity=".6" />
-                </svg>
+          <!-- ── Accordion: Face Contouring ───────────────────────── -->
+          <details class="acc-section" open>
+            <summary>
+              <svg class="acc-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
+                stroke-linecap="round" stroke-linejoin="round">
+                <path
+                  d="M20.84 4.61a5.5 5.5 0 0 0-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 0 0-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 0 0 0-7.78z" />
+              </svg>
+              Face Contouring
+              <span class="acc-badge">2</span>
+            </summary>
+            <div class="acc-body">
+              <div class="param-ctrl">
+                <div class="param-header">
+                  <div class="param-icon-wrap">
+                    <svg viewBox="0 0 32 32" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"
+                      stroke-linejoin="round">
+                      <ellipse cx="16" cy="16" rx="11" ry="13" stroke-opacity=".28" />
+                      <ellipse cx="16" cy="16" rx="7" ry="9" stroke-dasharray="2 2" stroke-opacity=".35" />
+                      <path d="M3 16 L8 16 M7 14 L8 16 L7 18" stroke-opacity=".65" />
+                      <path d="M29 16 L24 16 M25 14 L24 16 L25 18" stroke-opacity=".65" />
+                    </svg>
+                  </div>
+                  <div class="param-info">
+                    <span class="param-name">Face Slimming</span>
+                    <span class="param-micro">Bilateral jaw compression &middot; oval axis</span>
+                  </div>
+                  <span class="param-val" id="vSlim">0%</span>
+                </div>
+                <div class="param-track-wrap">
+                  <input type="range" min="0" max="100" value="0" class="param-slider" id="sSlim" style="--pct:0%" />
+                  <div class="param-tick-row">
+                    <span>0</span><span>25</span><span>50</span><span>75</span><span>100</span>
+                  </div>
+                </div>
               </div>
-              <div class="param-info">
-                <span class="param-name">Lip Widening</span>
-                <span class="param-micro">Lateral expansion &middot; mouth corners</span>
-              </div>
-              <span class="param-val" id="vLip">0%</span>
-            </div>
-            <div class="param-track-wrap">
-              <input type="range" min="0" max="100" value="0" class="param-slider" id="sLip" style="--pct:0%" />
-              <div class="param-tick-row"><span>0</span><span>25</span><span>50</span><span>75</span><span>100</span>
-              </div>
-            </div>
-          </div>
-
-          <!-- Face Slimming -->
-          <div class="param-ctrl">
-            <div class="param-header">
-              <div class="param-icon-wrap">
-                <svg viewBox="0 0 32 32" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"
-                  stroke-linejoin="round">
-                  <ellipse cx="16" cy="16" rx="11" ry="13" stroke-opacity=".28" />
-                  <ellipse cx="16" cy="16" rx="7" ry="9" stroke-dasharray="2 2" stroke-opacity=".35" />
-                  <path d="M3 16 L8 16 M7 14 L8 16 L7 18" stroke-opacity=".65" />
-                  <path d="M29 16 L24 16 M25 14 L24 16 L25 18" stroke-opacity=".65" />
-                </svg>
-              </div>
-              <div class="param-info">
-                <span class="param-name">Face Slimming</span>
-                <span class="param-micro">Bilateral jaw compression &middot; oval axis</span>
-              </div>
-              <span class="param-val" id="vSlim">0%</span>
-            </div>
-            <div class="param-track-wrap">
-              <input type="range" min="0" max="100" value="0" class="param-slider" id="sSlim" style="--pct:0%" />
-              <div class="param-tick-row"><span>0</span><span>25</span><span>50</span><span>75</span><span>100</span>
-              </div>
-            </div>
-          </div>
-
-          <!-- Facial Volume -->
-          <div class="param-ctrl">
-            <div class="param-header">
-              <div class="param-icon-wrap">
-                <svg viewBox="0 0 32 32" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"
-                  stroke-linejoin="round">
-                  <ellipse cx="16" cy="15" rx="10" ry="9" stroke-opacity=".28" />
-                  <ellipse cx="16" cy="16" rx="12" ry="11" />
-                  <path d="M8 18 Q11 23 16 24 Q21 23 24 18" stroke-opacity=".55" />
-                  <circle cx="9" cy="15" r="1.4" fill="currentColor" stroke="none" opacity=".45" />
-                  <circle cx="23" cy="15" r="1.4" fill="currentColor" stroke="none" opacity=".45" />
-                </svg>
-              </div>
-              <div class="param-info">
-                <span class="param-name">Facial Volume</span>
-                <span class="param-micro">Cheek &amp; submental fullness &middot; radial expansion</span>
-              </div>
-              <span class="param-val" id="vFaceFullness">0%</span>
-            </div>
-            <div class="param-track-wrap">
-              <input type="range" min="0" max="100" value="0" class="param-slider" id="sFaceFullness"
-                style="--pct:0%" />
-              <div class="param-tick-row"><span>0</span><span>25</span><span>50</span><span>75</span><span>100</span>
+              <div class="param-ctrl">
+                <div class="param-header">
+                  <div class="param-icon-wrap">
+                    <svg viewBox="0 0 32 32" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"
+                      stroke-linejoin="round">
+                      <ellipse cx="16" cy="15" rx="10" ry="9" stroke-opacity=".28" />
+                      <ellipse cx="16" cy="16" rx="12" ry="11" />
+                      <path d="M8 18 Q11 23 16 24 Q21 23 24 18" stroke-opacity=".55" />
+                      <circle cx="9" cy="15" r="1.4" fill="currentColor" stroke="none" opacity=".45" />
+                      <circle cx="23" cy="15" r="1.4" fill="currentColor" stroke="none" opacity=".45" />
+                    </svg>
+                  </div>
+                  <div class="param-info">
+                    <span class="param-name">Facial Volume</span>
+                    <span class="param-micro">Cheek &amp; submental fullness &middot; radial expansion</span>
+                  </div>
+                  <span class="param-val" id="vFaceFullness">0%</span>
+                </div>
+                <div class="param-track-wrap">
+                  <input type="range" min="0" max="100" value="0" class="param-slider" id="sFaceFullness"
+                    style="--pct:0%" />
+                  <div class="param-tick-row">
+                    <span>0</span><span>25</span><span>50</span><span>75</span><span>100</span>
+                  </div>
+                </div>
               </div>
             </div>
-          </div>
-
-          <!-- Big Eyes -->
-          <div class="param-ctrl">
-            <div class="param-header">
-              <div class="param-icon-wrap">
-                <svg viewBox="0 0 32 32" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"
-                  stroke-linejoin="round">
-                  <ellipse cx="10" cy="16" rx="6" ry="4" />
-                  <ellipse cx="22" cy="16" rx="6" ry="4" />
-                  <circle cx="10" cy="16" r="2.2" fill="currentColor" stroke="none" opacity=".55" />
-                  <circle cx="22" cy="16" r="2.2" fill="currentColor" stroke="none" opacity=".55" />
-                  <path d="M4 16 Q10 9 16 16 Q22 9 28 16" stroke-opacity=".3" stroke-dasharray="2 2" />
-                </svg>
-              </div>
-              <div class="param-info">
-                <span class="param-name">Big Eyes</span>
-                <span class="param-micro">Iris radial expansion &middot; brow &amp; nose locked</span>
-              </div>
-              <span class="param-val" id="vEyeSize">0%</span>
-            </div>
-            <div class="param-track-wrap">
-              <input type="range" min="0" max="100" value="0" class="param-slider" id="sEyeSize" style="--pct:0%" />
-              <div class="param-tick-row"><span>0</span><span>25</span><span>50</span><span>75</span><span>100</span>
-              </div>
-            </div>
-          </div>
+          </details>
 
           <div class="ctrl-divider"></div>
 
@@ -1598,6 +1638,47 @@
             </div>
           </div>
         </div>
+
+        <!-- ── RIGHT: Technical Metrics panel ──────────────────────── -->
+        <div class="expr-metrics-panel">
+          <div class="metrics-panel-card">
+            <div class="metrics-section-head">Technical Metrics</div>
+            <div class="metric-grid-2">
+              <div class="metric-card" id="mcDuration">
+                <div class="metric-val" id="mcDurationVal">—</div>
+                <div class="metric-lbl">Duration</div>
+              </div>
+              <div class="metric-card" id="mcMoved">
+                <div class="metric-val" id="mcMovedVal">—</div>
+                <div class="metric-lbl">Moved pts</div>
+              </div>
+              <div class="metric-card" id="mcMaxD">
+                <div class="metric-val" id="mcMaxDVal">—</div>
+                <div class="metric-lbl">Max &Delta; px</div>
+              </div>
+              <div class="metric-card" id="mcTri">
+                <div class="metric-val" id="mcTriVal">—</div>
+                <div class="metric-lbl">Triangles</div>
+              </div>
+            </div>
+            <div style="margin-top:8px">
+              <div class="metric-card-wide" id="mcMethod">
+                <span class="metric-wide-lbl">Method</span>
+                <span class="metric-wide-val" id="mcMethodVal">—</span>
+              </div>
+            </div>
+          </div>
+          <div class="metrics-panel-card">
+            <div class="live-stream-head">Live Stream</div>
+            <div class="live-stream" id="exprLiveStream">
+              <div class="ls-row">
+                <span class="ls-ts">—</span>
+                <span class="ls-val">Awaiting warp&hellip;</span>
+              </div>
+            </div>
+          </div>
+        </div>
+
       </div>
 
       <div class="page-nav">
