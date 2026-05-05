@@ -116,10 +116,10 @@ function loadImageFromDataUrl(dataUrl) {
 }
 
 async function getCurrentImageBlob() {
-  const directFile = fileInput?.files?.[0];
-  if (directFile) return directFile;
   if (!appState.imageDataUrl) return null;
-  return dataUrlToBlob(appState.imageDataUrl);
+  const currentBlob = dataUrlToBlob(appState.imageDataUrl);
+  if (currentBlob) return currentBlob;
+  return fileInput?.files?.[0] || null;
 }
 
 function sampleLandmarks(points, targetCount = 68) {
@@ -325,16 +325,50 @@ function applyLandmarksToSvg(points68, meshPoints = points68) {
   const bgImg = document.querySelector('#lmBgImg');
   const refEl = (bgImg && bgImg.style.display !== 'none') ? bgImg : lmCanvas;
   const refRect = refEl?.getBoundingClientRect();
-  const displayedImageWidth = Math.max(1, Math.round(refRect?.width || svg.clientWidth || 300));
-  const displayedImageHeight = Math.max(1, Math.round(refRect?.height || svg.clientHeight || 290));
+  const overlayWidth = Math.max(1, Math.round(refRect?.width || svg.clientWidth || 300));
+  const overlayHeight = Math.max(1, Math.round(refRect?.height || svg.clientHeight || 290));
 
   // Keep SVG overlay pixel-space aligned with the displayed image layer.
-  svg.setAttribute('width', String(displayedImageWidth));
-  svg.setAttribute('height', String(displayedImageHeight));
-  svg.setAttribute('viewBox', `0 0 ${displayedImageWidth} ${displayedImageHeight}`);
+  svg.setAttribute('width', String(overlayWidth));
+  svg.setAttribute('height', String(overlayHeight));
+  svg.setAttribute('viewBox', `0 0 ${overlayWidth} ${overlayHeight}`);
 
   const sampled = sampleLandmarks(points68, circles.length);
   backendState.landmarks = sampled;
+
+  const getDisplayMap = p => {
+    const imageWidth = Number(p?.imageWidth || overlayWidth);
+    const imageHeight = Number(p?.imageHeight || overlayHeight);
+    if (!bgImg || bgImg.style.display === 'none' || !bgImg.naturalWidth || !bgImg.naturalHeight) {
+      return {
+        imageWidth,
+        imageHeight,
+        x0: 0,
+        y0: 0,
+        scaleX: overlayWidth / Math.max(1, imageWidth),
+        scaleY: overlayHeight / Math.max(1, imageHeight),
+      };
+    }
+    const naturalRatio = bgImg.naturalWidth / Math.max(1, bgImg.naturalHeight);
+    const boxRatio = overlayWidth / Math.max(1, overlayHeight);
+    let drawW = overlayWidth;
+    let drawH = overlayHeight;
+    if (naturalRatio > boxRatio) {
+      drawH = overlayWidth / naturalRatio;
+    } else {
+      drawW = overlayHeight * naturalRatio;
+    }
+    const x0 = (overlayWidth - drawW) * 0.5;
+    const y0 = (overlayHeight - drawH) * 0.5;
+    return {
+      imageWidth,
+      imageHeight,
+      x0,
+      y0,
+      scaleX: drawW / Math.max(1, imageWidth),
+      scaleY: drawH / Math.max(1, imageHeight),
+    };
+  };
 
   // Compute screen-space mapped coordinates from image-space landmarks.
   const mx = [], my = [];
@@ -344,10 +378,9 @@ function applyLandmarksToSvg(points68, meshPoints = points68) {
     const ix = Number(p.x);
     const iy = Number(p.y);
 
-    const imageWidth = Number(p.imageWidth || displayedImageWidth);
-    const imageHeight = Number(p.imageHeight || displayedImageHeight);
-    mx[i] = Number.isFinite(ix) ? (ix / imageWidth) * displayedImageWidth : Number(c.getAttribute('cx'));
-    my[i] = Number.isFinite(iy) ? (iy / imageHeight) * displayedImageHeight : Number(c.getAttribute('cy'));
+    const map = getDisplayMap(p);
+    mx[i] = Number.isFinite(ix) ? map.x0 + ix * map.scaleX : Number(c.getAttribute('cx'));
+    my[i] = Number.isFinite(iy) ? map.y0 + iy * map.scaleY : Number(c.getAttribute('cy'));
 
     c.setAttribute('cx', mx[i].toFixed(2));
     c.setAttribute('cy', my[i].toFixed(2));
@@ -359,11 +392,10 @@ function applyLandmarksToSvg(points68, meshPoints = points68) {
   (Array.isArray(meshPoints) ? meshPoints : []).forEach(p => {
     const ix = Number(p.x);
     const iy = Number(p.y);
-    const imageWidth = Number(p.imageWidth || displayedImageWidth);
-    const imageHeight = Number(p.imageHeight || displayedImageHeight);
     if (!Number.isFinite(ix) || !Number.isFinite(iy)) return;
-    const x = (ix / imageWidth) * displayedImageWidth;
-    const y = (iy / imageHeight) * displayedImageHeight;
+    const map = getDisplayMap(p);
+    const x = map.x0 + ix * map.scaleX;
+    const y = map.y0 + iy * map.scaleY;
     meshNodes.push({ x, y });
   });
   renderLandmarkMesh(meshNodes);
@@ -849,7 +881,7 @@ function syncLandmarkPhotoBg() {
   if (!img) {
     img = document.createElement('img');
     img.id = 'lmBgImg'; img.alt = '';
-    img.style.cssText = 'position:absolute;inset:0;width:100%;height:100%;object-fit:fill;border-radius:inherit;display:none;opacity:0.40;z-index:0;';
+    img.style.cssText = 'position:absolute;inset:0;width:100%;height:100%;object-fit:contain;background:#0b1220;border-radius:inherit;display:none;opacity:0.55;z-index:0;';
     lmCanvas.prepend(img);
     // Keep scan line + SVG above the photo in the same coordinate space.
     const scan = lmCanvas.querySelector('.lm-scan');
@@ -1196,7 +1228,7 @@ if (toggleMesh && meshOverlay) toggleMesh.addEventListener('change', () => {
 });
 
 /* ═══════════════════ AGING SLIDERS ═══════════════════ */
-['sAge', 'sContrast', 'sTone', 'sNoise', 'sDetail'].forEach(id => {
+['sAge', 'sContrast', 'sTone', 'sNoise', 'sDetail', 'sWrinkle', 'sGrayHair'].forEach(id => {
   const s = $(`#${id}`), v = $(`#v${id.slice(1)}`);
   if (s && v) s.addEventListener('input', () => {
     v.textContent = s.value + '%';
@@ -1860,12 +1892,15 @@ if ($('#btnSimulate')) $('#btnSimulate').addEventListener('click', async functio
     fd.append('image', srcBlob, 'aging-input.jpg');
     fd.append('mode', $('#ageMode .seg-btn.active')?.dataset.v || 'aging');
     fd.append('method', selectedMethod);
-    fd.append('years', String(Number($('#sTargetAge')?.value || 10)));
-    fd.append('strength', String(Number($('#sAge')?.value || 50) / 100));
-    fd.append('contrast', String(Number($('#sContrast')?.value || 50) / 100));
+    fd.append('years', String(Number($('#sTargetAge')?.value || 35)));
+    fd.append('strength', String(Number($('#sAge')?.value || 68) / 100));
+    fd.append('contrast', String(Number($('#sContrast')?.value || 45) / 100));
     fd.append('tone', String(Number($('#sTone')?.value || 50) / 100));
-    fd.append('noise', String(Number($('#sNoise')?.value || 0) / 100));
-    fd.append('detail', String(Number($('#sDetail')?.value || 50) / 100));
+    fd.append('noise', String(Number($('#sNoise')?.value || 3) / 100));
+    fd.append('detail', String(Number($('#sDetail')?.value || 60) / 100));
+    fd.append('wrinkleStrength', String(Number($('#sWrinkle')?.value || 62) / 100));
+    fd.append('grayHairStrength', String(Number($('#sGrayHair')?.value || 62) / 100));
+    fd.append('preserveEdges', $('#preserveEdges')?.checked ? 'true' : 'false');
     fd.append('deterministic', 'true');
     fd.append('hpf', $('#selHPF')?.value || 'gaussian_hpf');
     fd.append('lpf', $('#selLPF')?.value || 'gaussian_lpf');

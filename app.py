@@ -615,10 +615,10 @@ def _fill_feature_masks_from_landmarks(mask: np.ndarray, points) -> bool:
             temp = cv2.dilate(temp, kernel, iterations=1)
         mask[:] = cv2.bitwise_or(mask, temp)
 
-    add_poly([33, 7, 163, 144, 145, 153, 154, 155, 133, 246, 161, 160, 159, 158, 157, 173], 5)
-    add_poly([362, 382, 381, 380, 374, 373, 390, 249, 263, 466, 388, 387, 386, 385, 384, 398], 5)
-    add_poly([61, 146, 91, 181, 84, 17, 314, 405, 321, 375, 291, 308, 324, 318, 402, 317, 14, 87, 178, 88, 95], 7)
-    add_poly([1, 4, 5, 195, 197, 98, 327, 2, 94, 19], 5)
+    add_poly([33, 7, 163, 144, 145, 153, 154, 155, 133, 246, 161, 160, 159, 158, 157, 173], 13)
+    add_poly([362, 382, 381, 380, 374, 373, 390, 249, 263, 466, 388, 387, 386, 385, 384, 398], 13)
+    add_poly([61, 146, 91, 181, 84, 17, 314, 405, 321, 375, 291, 308, 324, 318, 402, 317, 14, 87, 178, 88, 95], 10)
+    add_poly([1, 4, 5, 195, 197, 98, 327, 2, 94, 19], 7)
 
     brow_left = _mean_landmark_point(points, [70, 63, 105, 66, 107])
     brow_right = _mean_landmark_point(points, [336, 296, 334, 293, 300])
@@ -912,9 +912,8 @@ def _generate_landmark_wrinkle_layer(shape: tuple[int, int], landmarks, face_box
         mid = (left + right) * 0.5 + np.array([0.0, eye_span * 0.020], dtype=np.float32)
         _draw_wrinkle_curve(layer, [left, mid, right], thickness)
 
-    # Blur radius scales with image size: ~min(h,w)/30 px ensures that drawn
-    # wrinkle strokes become wide, soft shadows rather than sharp black lines.
-    blur_k = _odd_kernel(max(7, int(min(h, w) / 30)))
+    # Strong feathering keeps wrinkle strokes as soft tonal changes, not lines.
+    blur_k = _odd_kernel(max(9, int(min(h, w) / 28)))
     layer = cv2.GaussianBlur(layer, (blur_k, blur_k), blur_k * 0.35)
     return layer * float(semantic_boost)
 
@@ -965,8 +964,8 @@ def _generate_wrinkle_layer(shape: tuple[int, int], face_box: tuple[int, int, in
             slope = bh * float(rng.uniform(-0.018, 0.018))
             _draw_wrinkle_line(layer, (cx, cy), (cx + side * length, cy + slope), thickness)
 
-    # Blur radius scales with image size so drawn strokes become soft shadows
-    blur_k = _odd_kernel(max(7, int(min(h, w) / 30)))
+    # Strong feathering keeps wrinkle strokes as soft tonal changes, not lines.
+    blur_k = _odd_kernel(max(9, int(min(h, w) / 28)))
     layer = cv2.GaussianBlur(layer, (blur_k, blur_k), blur_k * 0.35)
     return layer * float(semantic_boost)
 
@@ -1005,7 +1004,7 @@ def _generate_age_shadow_layer(shape: tuple[int, int], face_box: tuple[int, int,
             eye_span = max(12.0, float(np.linalg.norm(right_outer - left_outer)))
             for a, b in ((left_outer, left_inner), (right_inner, right_outer)):
                 center = (a + b) * 0.5 + np.array([0.0, eye_span * 0.045], dtype=np.float32)
-                layer += soft_ellipse(center, (eye_span * 0.105, eye_span * 0.028), 0, -0.75)
+                layer += soft_ellipse(center, (eye_span * 0.115, eye_span * 0.032), 0, -0.42)
 
         if all(p is not None for p in (mouth_left, mouth_right, nose_left, nose_right)):
             thickness = max(2, int(round(min(w, h) / 190.0)))
@@ -1020,8 +1019,8 @@ def _generate_age_shadow_layer(shape: tuple[int, int], face_box: tuple[int, int,
                 ).reshape((-1, 1, 2))
                 cv2.polylines(layer, [pts], False, -1.0, thickness, lineType=cv2.LINE_AA)
     else:
-        layer += soft_ellipse((x + bw * 0.35, y + bh * 0.49), (bw * 0.12, bh * 0.035), 0, -0.65)
-        layer += soft_ellipse((x + bw * 0.65, y + bh * 0.49), (bw * 0.12, bh * 0.035), 0, -0.65)
+        layer += soft_ellipse((x + bw * 0.35, y + bh * 0.49), (bw * 0.12, bh * 0.035), 0, -0.42)
+        layer += soft_ellipse((x + bw * 0.65, y + bh * 0.49), (bw * 0.12, bh * 0.035), 0, -0.42)
         cv2.line(layer, (int(x + bw * 0.40), int(y + bh * 0.59)), (int(x + bw * 0.34), int(y + bh * 0.76)), -1.0, max(2, int(min(w, h) / 190)), lineType=cv2.LINE_AA)
         cv2.line(layer, (int(x + bw * 0.60), int(y + bh * 0.59)), (int(x + bw * 0.66), int(y + bh * 0.76)), -1.0, max(2, int(min(w, h) / 190)), lineType=cv2.LINE_AA)
 
@@ -1032,43 +1031,246 @@ def _generate_age_shadow_layer(shape: tuple[int, int], face_box: tuple[int, int,
     return np.clip(layer, -1.0, 0.35)
 
 
-def _apply_age_hair_graying(out: np.ndarray, original: np.ndarray, masks: dict, intensity: float, rng) -> np.ndarray:
+def _soft_age_region_mask(shape: tuple[int, int], center, axes, angle: float = 0.0) -> np.ndarray:
+    h, w = shape
+    mask = np.zeros((h, w), dtype=np.float32)
+    cv2.ellipse(
+        mask,
+        tuple(np.round(center).astype(int)),
+        (max(2, int(round(axes[0]))), max(2, int(round(axes[1])))),
+        float(angle),
+        0,
+        360,
+        1.0,
+        -1,
+        lineType=cv2.LINE_AA,
+    )
+    blur_k = _odd_kernel(max(7, int(min(w, h) * 0.035)))
+    return np.clip(cv2.GaussianBlur(mask, (blur_k, blur_k), 0), 0.0, 1.0)
+
+
+def _generate_natural_age_texture(
+    l_orig: np.ndarray,
+    masks: dict,
+    rng,
+    wrinkle_strength: float,
+) -> np.ndarray:
+    h, w = l_orig.shape
+    x, y, bw, bh = masks["faceBox"]
+    landmarks = masks.get("landmarks")
+
+    fine = np.clip(l_orig - cv2.GaussianBlur(l_orig, (0, 0), 0.9), -18.0, 18.0)
+    medium = np.clip(l_orig - cv2.GaussianBlur(l_orig, (0, 0), 2.8), -18.0, 18.0)
+    noise = rng.normal(0.0, 1.0, size=l_orig.shape).astype(np.float32)
+    noise = (
+        cv2.GaussianBlur(noise, (0, 0), 1.8) * 0.44
+        + cv2.GaussianBlur(noise, (0, 0), 4.5) * 0.36
+        + cv2.GaussianBlur(noise, (0, 0), 9.0) * 0.20
+    )
+    noise = cv2.normalize(noise, None, -1.0, 1.0, cv2.NORM_MINMAX) * 1.8
+
+    regions: dict[str, np.ndarray] = {}
+    if landmarks and len(landmarks) >= 468:
+        left_outer = _point_from_landmarks(landmarks, 33)
+        left_inner = _point_from_landmarks(landmarks, 133)
+        right_inner = _point_from_landmarks(landmarks, 362)
+        right_outer = _point_from_landmarks(landmarks, 263)
+        brow_left = _mean_landmark_point(landmarks, [70, 63, 105, 66, 107])
+        brow_right = _mean_landmark_point(landmarks, [336, 296, 334, 293, 300])
+        mouth_left = _point_from_landmarks(landmarks, 61)
+        mouth_right = _point_from_landmarks(landmarks, 291)
+        nose_left = _point_from_landmarks(landmarks, 98)
+        nose_right = _point_from_landmarks(landmarks, 327)
+        if all(p is not None for p in (left_outer, left_inner, right_inner, right_outer, brow_left, brow_right)):
+            eye_span = max(12.0, float(np.linalg.norm(right_outer - left_outer)))
+            brow_mid = (brow_left + brow_right) * 0.5
+            regions["forehead"] = _soft_age_region_mask(
+                l_orig.shape,
+                brow_mid + np.array([0.0, -eye_span * 0.36], dtype=np.float32),
+                (eye_span * 0.42, eye_span * 0.18),
+            )
+            eye_regions = np.zeros_like(l_orig, dtype=np.float32)
+            for a, b in ((left_outer, left_inner), (right_inner, right_outer)):
+                center = (a + b) * 0.5 + np.array([0.0, eye_span * 0.09], dtype=np.float32)
+                eye_regions = np.maximum(eye_regions, _soft_age_region_mask(l_orig.shape, center, (eye_span * 0.20, eye_span * 0.075)))
+            for outer, direction in ((left_outer, -1.0), (right_outer, 1.0)):
+                eye_regions = np.maximum(
+                    eye_regions,
+                    _soft_age_region_mask(
+                        l_orig.shape,
+                        outer + np.array([direction * eye_span * 0.10, eye_span * 0.02], dtype=np.float32),
+                        (eye_span * 0.14, eye_span * 0.11),
+                        angle=direction * 12.0,
+                    ),
+                )
+            regions["eyes"] = eye_regions
+        if all(p is not None for p in (mouth_left, mouth_right, nose_left, nose_right)):
+            fold_regions = np.zeros_like(l_orig, dtype=np.float32)
+            for mouth, nose, direction in ((mouth_left, nose_left, -1.0), (mouth_right, nose_right, 1.0)):
+                center = nose * 0.50 + mouth * 0.50 + np.array([direction * bw * 0.02, bh * 0.02], dtype=np.float32)
+                length = max(8.0, float(np.linalg.norm(mouth - nose)))
+                angle = float(np.degrees(np.arctan2(float(mouth[1] - nose[1]), float(mouth[0] - nose[0]))))
+                fold_regions = np.maximum(fold_regions, _soft_age_region_mask(l_orig.shape, center, (length * 0.48, eye_span * 0.08 if "eye_span" in locals() else bh * 0.035), angle))
+            regions["folds"] = fold_regions
+
+    if not regions:
+        regions["forehead"] = _soft_age_region_mask(l_orig.shape, (x + bw * 0.50, y + bh * 0.27), (bw * 0.25, bh * 0.10))
+        regions["eyes"] = np.maximum(
+            _soft_age_region_mask(l_orig.shape, (x + bw * 0.35, y + bh * 0.47), (bw * 0.13, bh * 0.055)),
+            _soft_age_region_mask(l_orig.shape, (x + bw * 0.65, y + bh * 0.47), (bw * 0.13, bh * 0.055)),
+        )
+        regions["folds"] = np.maximum(
+            _soft_age_region_mask(l_orig.shape, (x + bw * 0.40, y + bh * 0.64), (bw * 0.06, bh * 0.15), -18),
+            _soft_age_region_mask(l_orig.shape, (x + bw * 0.60, y + bh * 0.64), (bw * 0.06, bh * 0.15), 18),
+        )
+
+    texture = np.zeros_like(l_orig, dtype=np.float32)
+    weights = {
+        "forehead": (0.18, 0.40, 0.08, 0.62),
+        "eyes": (0.30, 0.26, 0.08, 0.68),
+        "folds": (0.14, 0.44, 0.06, 0.66),
+    }
+    for name, mask in regions.items():
+        wf, wm, wn, amp = weights.get(name, (0.28, 0.44, 0.16, 0.80))
+        texture += mask * (fine * wf + medium * wm + noise * wn) * amp
+
+    face_gate = np.clip(masks["processingMask"].astype(np.float32), 0.0, 1.0)
+    texture = cv2.GaussianBlur(texture, (0, 0), 0.65)
+    return texture * face_gate * (0.25 + 0.62 * wrinkle_strength)
+
+
+def _generate_age_spot_mask(shape: tuple[int, int], masks: dict, rng, intensity: float) -> np.ndarray:
+    h, w = shape
+    skin = np.clip(masks["processingMask"].astype(np.float32), 0.0, 1.0)
+    protected = np.clip(masks["protectedMask"].astype(np.float32), 0.0, 1.0)
+    spot_mask = np.zeros((h, w), dtype=np.float32)
+    count = int(round(4 + 10 * float(intensity)))
+    ys, xs = np.where((skin > 0.32) & (protected < 0.35))
+    if len(xs) < 16:
+        return spot_mask
+    for _ in range(count):
+        j = int(rng.integers(0, len(xs)))
+        cx = int(xs[j] + rng.normal(0, w * 0.018))
+        cy = int(ys[j] + rng.normal(0, h * 0.018))
+        if not (0 <= cx < w and 0 <= cy < h):
+            continue
+        radius = int(max(1, rng.uniform(min(w, h) * 0.004, min(w, h) * 0.012)))
+        value = float(rng.uniform(0.06, 0.22))
+        cv2.circle(spot_mask, (cx, cy), radius, value, -1, lineType=cv2.LINE_AA)
+    blur_k = _odd_kernel(max(5, int(min(w, h) * 0.012)))
+    spot_mask = cv2.GaussianBlur(spot_mask, (blur_k, blur_k), 0)
+    return np.clip(spot_mask * skin * (1.0 - protected * 0.65), 0.0, 1.0)
+
+
+def _apply_age_hair_graying(
+    out: np.ndarray,
+    original: np.ndarray,
+    masks: dict,
+    intensity: float,
+    gray_hair_strength: float,
+    rng,
+) -> tuple[np.ndarray, np.ndarray]:
     h, w = original.shape[:2]
     x, y, bw, bh = masks["faceBox"]
     region = np.zeros((h, w), dtype=np.float32)
-    x0 = max(0, int(x - bw * 0.12))
-    x1 = min(w, int(x + bw * 1.12))
-    y0 = max(0, int(y - bh * 0.10))
-    y1 = min(h, int(y + bh * 0.92))
+    x0 = max(0, int(x - bw * 0.22))
+    x1 = min(w, int(x + bw * 1.22))
+    y0 = max(0, int(y - bh * 0.45))
+    y1 = min(h, int(y + bh * 0.96))
     region[y0:y1, x0:x1] = 1.0
+    region_blur = _odd_kernel(max(15, int(min(w, h) * 0.055)))
+    region = cv2.GaussianBlur(region, (region_blur, region_blur), 0)
+    region = np.clip(region, 0.0, 1.0)
 
     hsv = cv2.cvtColor(original, cv2.COLOR_BGR2HSV)
     gray = cv2.cvtColor(original, cv2.COLOR_BGR2GRAY)
-    dark = ((gray < 88) & (hsv[:, :, 1] < 150)).astype(np.float32)
-    non_skin = 1.0 - np.clip(masks["skinMask"], 0.0, 1.0)
+    val = hsv[:, :, 2].astype(np.float32)
+    sat = hsv[:, :, 1].astype(np.float32)
+    texture = cv2.Laplacian(gray, cv2.CV_32F, ksize=3)
+    texture = cv2.GaussianBlur(np.abs(texture), (0, 0), 1.1)
+    texture_signal = np.clip(texture / 24.0, 0.0, 1.0)
+    dark_signal = np.clip((175.0 - val) / 100.0, 0.0, 1.0)
+    low_sat_signal = (
+        np.clip((80.0 - sat) / 70.0, 0.0, 1.0)
+        * np.clip((val - 65.0) / 120.0, 0.0, 1.0)
+        * np.clip((220.0 - val) / 70.0, 0.0, 1.0)
+        * texture_signal
+    )
+    hair_signal = np.clip(np.maximum(dark_signal, low_sat_signal) * (0.42 + 0.58 * texture_signal), 0.0, 1.0)
+    skin = np.clip(masks["skinMask"], 0.0, 1.0)
+    non_skin = 1.0 - skin
     protect = np.clip(masks["protectedMask"], 0.0, 1.0)
-    hair_mask = dark * non_skin * region * (1.0 - protect * 0.75)
+    scalp_mask = hair_signal * non_skin * region * (1.0 - protect * 0.85)
+
+    facial_region = np.zeros((h, w), dtype=np.float32)
+    fx0 = max(0, int(x + bw * 0.20))
+    fx1 = min(w, int(x + bw * 0.80))
+    fy0 = max(0, int(y + bh * 0.48))
+    fy1 = min(h, int(y + bh * 0.90))
+    facial_region[fy0:fy1, fx0:fx1] = 1.0
+    fr_blur = _odd_kernel(max(9, int(min(w, h) * 0.025)))
+    facial_region = cv2.GaussianBlur(facial_region, (fr_blur, fr_blur), 0)
+    facial_hair_signal = np.clip(dark_signal * (0.55 + 0.65 * texture_signal), 0.0, 1.0)
+    facial_mask = facial_hair_signal * facial_region * (0.42 + 0.58 * non_skin) * (1.0 - protect * 0.42)
+
+    hair_mask = np.clip(np.maximum(scalp_mask, facial_mask), 0.0, 1.0)
 
     if np.count_nonzero(hair_mask > 0.2) < 32:
-        return out
+        return out, hair_mask
 
     strand_noise = rng.normal(0.0, 1.0, size=gray.shape).astype(np.float32)
     strand_noise = cv2.GaussianBlur(strand_noise, (1, _odd_kernel(max(5, int(h * 0.018)))), 0)
     strand_noise = cv2.normalize(strand_noise, None, 0.0, 1.0, cv2.NORM_MINMAX)
-    hair_mask *= np.clip(0.40 + 0.85 * strand_noise, 0.0, 1.0)
-    hair_mask = cv2.GaussianBlur(hair_mask, (_odd_kernel(max(3, int(min(w, h) * 0.006))), _odd_kernel(max(3, int(min(w, h) * 0.006)))), 0)
-    hair_mask = np.clip(hair_mask * (0.18 + 0.28 * intensity), 0.0, 0.42)
+    salt_pepper = np.clip(0.32 + 0.82 * strand_noise, 0.0, 1.0)
+    hair_mask *= salt_pepper
+    hair_mask = cv2.GaussianBlur(hair_mask, (_odd_kernel(max(5, int(min(w, h) * 0.008))), _odd_kernel(max(5, int(min(w, h) * 0.008)))), 0)
+    hair_mask = np.clip(hair_mask * (0.20 + 0.46 * intensity) * gray_hair_strength, 0.0, 0.52)
 
-    target = np.full_like(out, 150.0, dtype=np.float32)
-    return out * (1.0 - hair_mask[:, :, None]) + target * hair_mask[:, :, None]
+    hsv_out = cv2.cvtColor(np.clip(out, 0, 255).astype(np.uint8), cv2.COLOR_BGR2HSV).astype(np.float32)
+    desat = np.clip(0.34 + 0.30 * gray_hair_strength + 0.12 * intensity, 0.0, 0.70)
+    lift = np.clip((190.0 - hsv_out[:, :, 2]) * (0.22 + 0.38 * gray_hair_strength), 0.0, 78.0)
+    hsv_target = hsv_out.copy()
+    hsv_target[:, :, 1] *= 1.0 - desat
+    hsv_target[:, :, 2] = np.clip(hsv_target[:, :, 2] + lift, 0.0, 255.0)
+    grayed = cv2.cvtColor(np.clip(hsv_target, 0, 255).astype(np.uint8), cv2.COLOR_HSV2BGR).astype(np.float32)
+    result = out * (1.0 - hair_mask[:, :, None]) + grayed * hair_mask[:, :, None]
+    return result, hair_mask
+
+
+def _apply_subtle_age_sag(out: np.ndarray, masks: dict, intensity: float, strength: float) -> np.ndarray:
+    h, w = out.shape[:2]
+    x, y, bw, bh = masks["faceBox"]
+    skin = np.clip(masks["skinMask"].astype(np.float32), 0.0, 1.0)
+    protected = np.clip(masks["protectedMask"].astype(np.float32), 0.0, 1.0)
+
+    yy, xx = np.mgrid[0:h, 0:w].astype(np.float32)
+    lower = np.clip((yy - (y + bh * 0.45)) / max(1.0, bh * 0.44), 0.0, 1.0)
+    cheek_band = np.exp(-((xx - (x + bw * 0.50)) / max(1.0, bw * 0.46)) ** 2)
+    jaw_band = np.exp(-((yy - (y + bh * 0.66)) / max(1.0, bh * 0.30)) ** 2)
+    mask = np.clip(skin * lower * cheek_band * jaw_band * (1.0 - protected * 0.82), 0.0, 1.0)
+    mask = cv2.GaussianBlur(mask, (_odd_kernel(max(11, int(min(w, h) * 0.045))), _odd_kernel(max(11, int(min(w, h) * 0.045)))), 0)
+
+    max_shift = min(w, h) * 0.006 * _clamp(intensity, 0.0, 1.0) * (0.45 + 0.55 * strength)
+    if max_shift < 0.20:
+        return out
+
+    center_x = x + bw * 0.50
+    outward = np.clip((xx - center_x) / max(1.0, bw * 0.50), -1.0, 1.0)
+    dx = outward * mask * max_shift * 0.42
+    dy = mask * max_shift
+    map_x = np.clip(xx - dx, 0, w - 1).astype(np.float32)
+    map_y = np.clip(yy - dy, 0, h - 1).astype(np.float32)
+    warped = cv2.remap(out.astype(np.float32), map_x, map_y, cv2.INTER_LINEAR, borderMode=cv2.BORDER_REFLECT)
+    blend = np.clip(mask * 0.72, 0.0, 0.72)
+    return out * (1.0 - blend[:, :, None]) + warped * blend[:, :, None]
 
 
 def _apply_lab_color_tone(lab: np.ndarray, skin_mask: np.ndarray, mode: str, intensity: float, tone: float):
-    tone_shift = (tone - 0.5) * 22.0
+    tone_shift = (tone - 0.5) * 14.0
     if mode == "aging":
-        lab[:, :, 0] += skin_mask * (tone_shift - 3.0 * intensity)
-        lab[:, :, 1] += skin_mask * (0.8 + 1.3 * intensity)
-        lab[:, :, 2] += skin_mask * (1.4 + 3.0 * intensity)
+        lab[:, :, 0] += skin_mask * (tone_shift - 1.2 * intensity)
+        lab[:, :, 1] += skin_mask * (0.35 + 0.65 * intensity)
+        lab[:, :, 2] += skin_mask * (0.75 + 1.60 * intensity)
     else:
         lab[:, :, 0] += skin_mask * (tone_shift + 4.0 * intensity)
         lab[:, :, 1] -= skin_mask * (1.0 + 2.0 * intensity)
@@ -1077,7 +1279,7 @@ def _apply_lab_color_tone(lab: np.ndarray, skin_mask: np.ndarray, mode: str, int
 
 def _apply_skin_contrast(luminance: np.ndarray, skin_mask: np.ndarray, mode: str, intensity: float, contrast: float) -> np.ndarray:
     if mode == "aging":
-        gain = 1.0 + 0.22 * intensity + (contrast - 0.5) * 0.70
+        gain = 1.0 + 0.08 * intensity + (contrast - 0.5) * 0.34
     else:
         gain = 1.0 - 0.16 * intensity + (contrast - 0.5) * 0.48
     adjusted = (luminance - 128.0) * gain + 128.0
@@ -1086,7 +1288,7 @@ def _apply_skin_contrast(luminance: np.ndarray, skin_mask: np.ndarray, mode: str
 
 def _age_intensity(strength: float, years: int, semantic_boost: float) -> float:
     year_gain = min(1.0, abs(float(years)) / 50.0)
-    return _clamp(strength * (0.65 + 0.35 * year_gain) * semantic_boost, 0.0, 1.35)
+    return _clamp(strength * (0.66 + 0.24 * year_gain) * semantic_boost, 0.0, 1.0)
 
 
 def _build_hair_exclusion_mask(
@@ -1146,6 +1348,8 @@ def _frequency_age_pipeline(
     hpf: str,
     lpf: str,
     preserve_edges: bool,
+    wrinkle_strength: float = 0.62,
+    gray_hair_strength: float = 0.62,
     semantic_boost: float = 1.0,
     save_debug: bool = False,
 ) -> tuple[np.ndarray, dict]:
@@ -1196,18 +1400,26 @@ def _frequency_age_pipeline(
     - Optional photon-noise grain is added in the aging path to simulate the
       appearance of skin micro-surface roughness on camera.
     """
-    seed = _make_deterministic_seed(image, mode, strength, years, contrast, tone, noise, detail, hpf, lpf, preserve_edges, semantic_boost)
+    wrinkle_strength = _clamp(wrinkle_strength, 0.0, 1.0)
+    gray_hair_strength = _clamp(gray_hair_strength, 0.0, 1.0)
+    seed = _make_deterministic_seed(
+        image, mode, strength, years, contrast, tone, noise, detail, hpf, lpf,
+        preserve_edges, wrinkle_strength, gray_hair_strength, semantic_boost,
+    )
     rng = np.random.default_rng(seed) if deterministic else np.random.default_rng()
     masks = _build_age_region_masks(image, preserve_edges=preserve_edges)
     skin = masks["skinMask"].astype(np.float32)
     processing = masks["processingMask"].astype(np.float32)
     protected = masks["protectedMask"].astype(np.float32)
+    age_detail_mask = np.clip(processing * (1.0 - protected * 0.58), 0.0, 1.0)
+    hair_debug_mask = np.zeros_like(skin, dtype=np.float32)
 
     # Work in L*a*b* to decouple luminance edits from colour
     lab = cv2.cvtColor(image, cv2.COLOR_BGR2LAB).astype(np.float32)
     l_orig = lab[:, :, 0].copy()
     l_mod = l_orig.copy()
     intensity = _age_intensity(strength, years, semantic_boost)
+    old_age_boost = _clamp(max(0.0, float(years)) / 50.0 * strength * semantic_boost, 0.0, 1.0)
 
     if mode == "aging":
         # ── Step 1: High-Pass Filter on luminance ────────────────────────
@@ -1221,31 +1433,38 @@ def _frequency_age_pipeline(
         # filter type — Ideal HPF passes more high-freq energy than Gaussian,
         # so its gain is higher to produce a comparable visual strength at the
         # same `strength` slider value.
-        hpf_gain = {"gaussian_hpf": 0.85, "butterworth_hpf": 1.08, "ideal_hpf": 1.34}.get(hpf, 1.0)
-        detail_gain = 0.70 + detail * 0.95
-        l_mod += processing * high * (0.78 + 1.58 * intensity) * hpf_gain * detail_gain
+        hpf_gain = {"gaussian_hpf": 0.48, "butterworth_hpf": 0.62, "ideal_hpf": 0.78}.get(hpf, 0.56)
+        detail_gain = 0.42 + detail * 0.46
+        wrinkle_drive = 0.12 + 0.50 * wrinkle_strength
+        l_mod += age_detail_mask * high * (0.40 + 0.78 * intensity + 0.16 * old_age_boost) * hpf_gain * detail_gain * wrinkle_drive
+
+        # Natural age texture: DoG/fBm enhancement in anatomical regions.
+        # This is the main visible wrinkle cue; it avoids mask-like drawn lines.
+        natural_texture = _generate_natural_age_texture(l_orig, masks, rng, wrinkle_strength)
+        l_mod += natural_texture * (1.0 - protected * 0.55) * (2.2 + 6.2 * intensity + 1.9 * old_age_boost) * (0.34 + detail * 0.38)
 
         # ── Step 3: Procedural wrinkle geometry ──────────────────────────
         # Draws anatomically-placed crease strokes on a float layer, then adds
         # them to luminance.  Strokes are heavily blurred (~min(h,w)/30 px) so
         # they appear as soft shadow-highlight pairs, not hard geometric lines.
         wrinkle_layer = _generate_wrinkle_layer(l_orig.shape, masks["faceBox"], rng, semantic_boost, masks.get("landmarks"))
-        wrinkle_gain = (6.0 + 20.0 * intensity) * (0.58 + detail * 0.46)
-        l_mod += processing * wrinkle_layer * wrinkle_gain
+        wrinkle_gain = (0.75 + 2.35 * intensity + 0.85 * old_age_boost) * (0.34 + detail * 0.24) * wrinkle_strength
+        l_mod += age_detail_mask * wrinkle_layer * wrinkle_gain
 
         # ── Step 4: Soft shadow layer ────────────────────────────────────
         # Adds subtle darkening under the eyes and along nasolabial folds to
         # simulate the depth shadows that become more pronounced with age.
         shadow_layer = _generate_age_shadow_layer(l_orig.shape, masks["faceBox"], masks.get("landmarks"), rng)
-        l_mod += skin * shadow_layer * (6.0 + 24.0 * intensity)
+        l_mod += skin * (1.0 - protected * 0.45) * shadow_layer * (3.2 + 8.8 * intensity + 2.2 * old_age_boost) * (0.35 + 0.45 * wrinkle_strength)
 
         # ── Step 5: Local contrast enhancement (CLAHE) ───────────────────
         # CLAHE (Contrast Limited Adaptive Histogram Equalisation) operates on
         # small 8×8 tiles.  Higher clipLimit → more micro-contrast, simulating
         # the uneven skin surface texture of aged skin.
-        clahe = cv2.createCLAHE(clipLimit=1.35 + 1.45 * intensity, tileGridSize=(8, 8))
+        clahe = cv2.createCLAHE(clipLimit=1.02 + 0.44 * intensity + 0.12 * old_age_boost, tileGridSize=(8, 8))
         local_contrast = clahe.apply(np.clip(l_orig, 0, 255).astype(np.uint8)).astype(np.float32)
-        l_mod = l_mod * (1.0 - processing * 0.13 * intensity) + local_contrast * (processing * 0.13 * intensity)
+        contrast_mix = age_detail_mask * (0.035 * intensity + 0.014 * old_age_boost)
+        l_mod = l_mod * (1.0 - contrast_mix) + local_contrast * contrast_mix
     else:
         # ── De-aging: Low-Pass Filter smoothing ──────────────────────────
         # The LPF retains only the low-frequency (smooth) component of L*.
@@ -1280,29 +1499,40 @@ def _frequency_age_pipeline(
     l_mod = _apply_skin_contrast(l_mod, skin, mode, intensity, contrast)
     lab[:, :, 0] = np.clip(l_mod, 0, 255)
     _apply_lab_color_tone(lab, skin, mode, intensity, tone)
+    if mode == "aging" and old_age_boost > 0.12 and wrinkle_strength > 0.001:
+        spot_mask = _generate_age_spot_mask(l_orig.shape, masks, rng, old_age_boost * wrinkle_strength)
+        lab[:, :, 0] = np.clip(lab[:, :, 0] - spot_mask * (2.0 + 4.5 * old_age_boost), 0, 255)
+        lab[:, :, 1] = np.clip(lab[:, :, 1] + spot_mask * (0.7 + 1.5 * old_age_boost), 0, 255)
+        lab[:, :, 2] = np.clip(lab[:, :, 2] + spot_mask * (1.4 + 3.2 * old_age_boost), 0, 255)
     lab = np.clip(lab, 0, 255)
     processed = cv2.cvtColor(lab.astype(np.uint8), cv2.COLOR_LAB2BGR).astype(np.float32)
 
     if noise > 0.001:
-        noise_scale = (18.0 if mode == "aging" else 5.5) * noise * (0.55 + 0.45 * intensity)
+        noise_scale = (6.5 if mode == "aging" else 5.5) * noise * (0.45 + 0.35 * intensity)
         grain = rng.normal(0.0, noise_scale, size=processed.shape).astype(np.float32)
         # noise_mask = processing (already excludes hair) intersected with inverse of
         # protected (excludes lips, eyes, teeth) — background is zero by construction.
         noise_mask = np.clip(processing * (1.0 - np.clip(protected, 0.0, 1.0)), 0.0, 1.0)
         processed += grain * noise_mask[:, :, None]
 
-    blend = np.clip(skin * (0.70 + 0.30 * strength), 0.0, 1.0)
+    blend = np.clip(skin * (0.56 + 0.28 * strength), 0.0, 1.0)
     out = image.astype(np.float32) * (1.0 - blend[:, :, None]) + processed * blend[:, :, None]
 
     if preserve_edges:
         # Restore original pixel values at sharp feature boundaries (eyes, nose,
         # mouth) using the landmark-based protect mask — not Canny edges, so that
         # only compact feature regions are restored and skin wrinkles remain.
-        restore = protected * np.clip(0.40 + 0.20 * (1.0 - strength), 0.0, 0.60)
+        if mode == "aging":
+            restore = protected * np.clip(0.82 + 0.10 * (1.0 - strength), 0.0, 0.92)
+        else:
+            restore = protected * np.clip(0.40 + 0.20 * (1.0 - strength), 0.0, 0.60)
         out = out * (1.0 - restore[:, :, None]) + image.astype(np.float32) * restore[:, :, None]
 
-    if mode == "aging" and intensity > 0.1:
-        out = _apply_age_hair_graying(out, image, masks, intensity, rng)
+    if mode == "aging" and intensity > 0.12:
+        out = _apply_subtle_age_sag(out, masks, intensity, strength)
+
+    if mode == "aging" and intensity > 0.1 and gray_hair_strength > 0.001:
+        out, hair_debug_mask = _apply_age_hair_graying(out, image, masks, intensity, gray_hair_strength, rng)
 
     meta = {
         "maskMethod": masks["maskMethod"],
@@ -1316,7 +1546,7 @@ def _frequency_age_pipeline(
             "skin":       _mask_b64(masks["skinMask"].astype(np.float32)),
             "processing": _mask_b64(processing),
             "protected":  _mask_b64(protected),
-            "hair":       _mask_b64(hair_excl),
+            "hair":       _mask_b64(hair_debug_mask),
         }
     return np.clip(out, 0, 255).astype(np.uint8), meta
 
@@ -3377,12 +3607,14 @@ def api_aging():
         return _error("Invalid low-pass filter. Use gaussian_lpf, butterworth_lpf, or ideal_lpf.", 400)
 
     try:
-        strength = float(request.form.get("strength", 0.5))
-        years = int(float(request.form.get("years", 10)))
-        contrast = float(request.form.get("contrast", 0.5))
+        strength = float(request.form.get("strength", 0.68))
+        years = int(float(request.form.get("years", 35)))
+        contrast = float(request.form.get("contrast", 0.45))
         tone = float(request.form.get("tone", 0.5))
-        noise = float(request.form.get("noise", 0.0))
-        detail = float(request.form.get("detail", 0.5))
+        noise = float(request.form.get("noise", 0.03))
+        detail = float(request.form.get("detail", 0.60))
+        wrinkle_strength = float(request.form.get("wrinkleStrength", 0.62))
+        gray_hair_strength = float(request.form.get("grayHairStrength", 0.62))
         deterministic = _parse_bool(request.form.get("deterministic", "true"), default=True)
         preserve_edges = _parse_bool(request.form.get("preserveEdges"), default=True)
         save_debug = _parse_bool(request.form.get("debug", "false"), default=False)
@@ -3394,14 +3626,18 @@ def api_aging():
     tone = _clamp(tone, 0.0, 1.0)
     noise = _clamp(noise, 0.0, 1.0)
     detail = _clamp(detail, 0.0, 1.0)
+    wrinkle_strength = _clamp(wrinkle_strength, 0.0, 1.0)
+    gray_hair_strength = _clamp(gray_hair_strength, 0.0, 1.0)
     years = max(-50, min(50, years))
 
     print("=" * 60, flush=True)
     print("AGING ENDPOINT CALLED", flush=True)
     print(f"  method   = {method!r}", flush=True)
     print(f"  mode     = {mode!r}", flush=True)
-    print(f"  strength = {strength:.3f}  (forced to 1.0 for debug)", flush=True)
+    print(f"  strength = {strength:.3f}", flush=True)
     print(f"  years    = {years}", flush=True)
+    print(f"  wrinkles = {wrinkle_strength:.3f}", flush=True)
+    print(f"  grayHair = {gray_hair_strength:.3f}", flush=True)
     print(f"  image    = {image.shape}  dtype={image.dtype}", flush=True)
     print("=" * 60, flush=True)
 
@@ -3462,6 +3698,8 @@ def api_aging():
             lpf=lpf,
             preserve_edges=preserve_edges,
             semantic_boost=1.0,
+            wrinkle_strength=wrinkle_strength,
+            gray_hair_strength=gray_hair_strength,
         )
     else:
         out, transform_meta = _frequency_age_pipeline(
@@ -3477,6 +3715,8 @@ def api_aging():
             hpf=hpf,
             lpf=lpf,
             preserve_edges=preserve_edges,
+            wrinkle_strength=wrinkle_strength,
+            gray_hair_strength=gray_hair_strength,
             semantic_boost=1.0,
             save_debug=save_debug,
         )
@@ -3521,6 +3761,8 @@ def api_aging():
             "years": years,
             "deterministic": deterministic,
             "preserveEdges": preserve_edges,
+            "wrinkleStrength": wrinkle_strength,
+            "grayHairStrength": gray_hair_strength,
             "hpf": hpf,
             "lpf": lpf,
             "modelStatus": model_status,

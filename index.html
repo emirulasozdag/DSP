@@ -1653,9 +1653,9 @@
                   </svg>
                 </div>
                 <span class="ctrl-name">Years to Simulate</span>
-                <span class="ctrl-val" id="vTargetAge">+10</span>
+                <span class="ctrl-val" id="vTargetAge">+35</span>
               </div>
-              <input type="range" min="-50" max="50" value="10" class="slider slider-bipolar" id="sTargetAge" />
+              <input type="range" min="-50" max="50" value="35" class="slider slider-bipolar" id="sTargetAge" />
               <div class="slider-range-labels"><span>−50 yrs</span><span>0</span><span>+50 yrs</span></div>
             </div>
 
@@ -1668,9 +1668,9 @@
                   </svg>
                 </div>
                 <span class="ctrl-name">Effect Strength</span>
-                <span class="ctrl-val" id="vAge">50%</span>
+                <span class="ctrl-val" id="vAge">68%</span>
               </div>
-              <input type="range" min="0" max="100" value="50" class="slider" id="sAge" />
+              <input type="range" min="0" max="100" value="68" class="slider" id="sAge" />
               <div class="slider-range-labels"><span>Subtle</span><span>Strong</span></div>
             </div>
 
@@ -1693,7 +1693,35 @@
               </select>
             </div>
 
-            <label class="sw"><input type="checkbox" checked /><span class="sw-track"></span><span class="sw-label">Keep
+            <div class="ctrl-group">
+              <div class="ctrl-row">
+                <div class="ctrl-icon-wrap"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                    stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+                    <path d="M4 8c3-2 5 2 8 0s5 2 8 0" />
+                    <path d="M4 13c3-2 5 2 8 0s5 2 8 0" />
+                    <path d="M4 18c3-2 5 2 8 0s5 2 8 0" />
+                  </svg></div>
+                <span class="ctrl-name">Wrinkle Strength</span><span class="ctrl-val" id="vWrinkle">62%</span>
+              </div>
+              <input type="range" min="0" max="100" value="62" class="slider" id="sWrinkle" />
+            </div>
+
+            <div class="ctrl-group">
+              <div class="ctrl-row">
+                <div class="ctrl-icon-wrap"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                    stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+                    <path d="M12 3c-4 0-7 3-7 7 0 2 1 4 3 5" />
+                    <path d="M12 3c4 0 7 3 7 7 0 2-1 4-3 5" />
+                    <path d="M8 15c1.5 4 6.5 4 8 0" />
+                    <path d="M9 7c-1 2-1 5 0 8" />
+                    <path d="M15 7c1 2 1 5 0 8" />
+                  </svg></div>
+                <span class="ctrl-name">Gray Hair</span><span class="ctrl-val" id="vGrayHair">62%</span>
+              </div>
+              <input type="range" min="0" max="100" value="62" class="slider" id="sGrayHair" />
+            </div>
+
+            <label class="sw"><input type="checkbox" id="preserveEdges" checked /><span class="sw-track"></span><span class="sw-label">Keep
                 facial features sharp</span></label>
 
             <div class="aging-section-divider"><span>Fine Adjustments</span></div>
@@ -1706,9 +1734,9 @@
                     <path
                       d="M12 1v4M12 19v4M4.22 4.22l2.83 2.83M16.95 16.95l2.83 2.83M1 12h4M19 12h4M4.22 19.78l2.83-2.83M16.95 7.05l2.83-2.83" />
                   </svg></div>
-                <span class="ctrl-name">Color Contrast</span><span class="ctrl-val" id="vContrast">50%</span>
+                <span class="ctrl-name">Color Contrast</span><span class="ctrl-val" id="vContrast">45%</span>
               </div>
-              <input type="range" min="0" max="100" value="50" class="slider" id="sContrast" />
+              <input type="range" min="0" max="100" value="45" class="slider" id="sContrast" />
             </div>
             <div class="ctrl-group">
               <div class="ctrl-row">
@@ -1731,9 +1759,9 @@
                     <path d="M12 3c2.5 4 2.5 14 0 18" />
                     <path d="M3 9h18M3 15h18" />
                   </svg></div>
-                <span class="ctrl-name">Film Grain</span><span class="ctrl-val" id="vNoise">20%</span>
+                <span class="ctrl-name">Film Grain</span><span class="ctrl-val" id="vNoise">3%</span>
               </div>
-              <input type="range" min="0" max="100" value="20" class="slider" id="sNoise" />
+              <input type="range" min="0" max="100" value="3" class="slider" id="sNoise" />
             </div>
             <div class="ctrl-group">
               <div class="ctrl-row">
@@ -1742,9 +1770,9 @@
                     <circle cx="11" cy="11" r="8" />
                     <path d="M21 21l-4.35-4.35" />
                   </svg></div>
-                <span class="ctrl-name">Fine Detail Level</span><span class="ctrl-val" id="vDetail">40%</span>
+                <span class="ctrl-name">Fine Detail Level</span><span class="ctrl-val" id="vDetail">60%</span>
               </div>
-              <input type="range" min="0" max="100" value="40" class="slider" id="sDetail" />
+              <input type="range" min="0" max="100" value="60" class="slider" id="sDetail" />
             </div>
 
             <button class="btn btn-primary btn-full aging-apply-btn" id="btnSimulate">
