@@ -3398,6 +3398,144 @@ def _blend_warped_face_mask(
     return np.clip(result, 0, 255).astype(np.uint8)
 
 
+# ═══════════════════════════════════════════════════════════════════════════════
+# PIXEL-LEVEL COLOR MANIPULATION  — Final-Overlay Passes
+# ═══════════════════════════════════════════════════════════════════════════════
+
+# MP-468 outer lip boundary indices (clockwise from left corner)
+_LIP_OUTER_INDICES: list = [
+    61, 185, 40, 39, 37, 0, 267, 269, 270, 409,
+    291, 375, 321, 405, 314, 17, 84, 181, 91, 146,
+]
+
+
+def _apply_lip_tint(
+    image: np.ndarray,
+    src_pts: np.ndarray,
+    groups: dict,
+    lip_tint: float,
+) -> np.ndarray:
+    """Translucent rose/red tint over lip polygon — texture detail preserved."""
+    if abs(lip_tint) < 1e-4:
+        return image
+    h, w = image.shape[:2]
+    n = len(src_pts)
+
+    # Build outer-lip polygon; fall back gracefully when using 68-pt model
+    lip_indices = [i for i in _LIP_OUTER_INDICES if i < n]
+    if len(lip_indices) < 6:
+        # 68-pt fallback: combine upper_lip + lower_lip + corners
+        fallback = []
+        for gname in ("mouth_left", "upper_lip", "mouth_right", "lower_lip"):
+            for idx in groups.get(gname, []):
+                if idx < n:
+                    fallback.append(idx)
+        lip_indices = list(dict.fromkeys(fallback))  # dedup, preserve order
+    if len(lip_indices) < 3:
+        return image
+
+    pts_arr = np.array(
+        [(int(round(src_pts[i][0])), int(round(src_pts[i][1]))) for i in lip_indices],
+        dtype=np.int32,
+    )
+
+    # Filled polygon mask
+    raw_mask = np.zeros((h, w), dtype=np.float32)
+    cv2.fillPoly(raw_mask, [pts_arr], 1.0)
+
+    # Soft feathered edge
+    ksize = max(int(min(h, w) * 0.014) | 1, 5)
+    soft_mask = cv2.GaussianBlur(raw_mask, (ksize * 2 + 1, ksize * 2 + 1), ksize * 0.45)
+
+    # Non-linear strength; maximum ~42 % blend to keep texture visible
+    dc = float(lip_tint) ** 0.65
+    alpha_max = 0.42
+    mask3 = (soft_mask * dc * alpha_max)[..., np.newaxis]  # (H, W, 1)
+
+    # Tint layer: rose-red BGR = (60, 40, 180)
+    tint_layer = np.empty_like(image, dtype=np.float32)
+    tint_layer[..., 0] = 60.0   # B
+    tint_layer[..., 1] = 40.0   # G
+    tint_layer[..., 2] = 180.0  # R
+
+    result = image.astype(np.float32) * (1.0 - mask3) + tint_layer * mask3
+    return np.clip(result, 0, 255).astype(np.uint8)
+
+
+def _apply_blush_effect(
+    image: np.ndarray,
+    src_pts: np.ndarray,
+    groups: dict,
+    blush: float,
+) -> np.ndarray:
+    """Soft Gaussian-gradient blush centred on MP landmarks 205 (L) / 425 (R) — apple of cheek."""
+    if abs(blush) < 1e-4:
+        return image
+    h, w = image.shape[:2]
+    n = len(src_pts)
+
+    # Landmarks 205 (left apple-of-cheek) and 425 (right apple-of-cheek) sit directly
+    # on the cheekbone — well below the eye and lateral to the nose.
+    # A small downward offset (+18 px) pushes the centre toward the softest part of
+    # the cheek and away from the lower eyelid.
+    VERT_OFFSET_PX = 18  # positive = down in image-space
+
+    if n > 425:
+        # Prefer landmarks 205 / 425 (full MP-468 mesh)
+        left_cx  = float(src_pts[205][0])
+        left_cy  = float(src_pts[205][1]) + VERT_OFFSET_PX
+        right_cx = float(src_pts[425][0])
+        right_cy = float(src_pts[425][1]) + VERT_OFFSET_PX
+        # Sigma based on inter-cheek distance; smaller than before so the spot
+        # stays on the cheek and doesn't bleed into the eye region.
+        face_w = max(abs(right_cx - left_cx), 1.0)
+        sigma = face_w * 0.16
+    elif n > 234:
+        # Partial MP mesh (>234 but ≤425): fall back to 234/454 with larger offset
+        face_w = max(abs(float(src_pts[234][0]) - float(src_pts[min(454, n - 1)][0])), 1.0)
+        left_cx  = float(src_pts[234][0]) + face_w * 0.10
+        left_cy  = float(src_pts[234][1]) + VERT_OFFSET_PX
+        right_cx = float(src_pts[min(454, n - 1)][0]) - face_w * 0.10
+        right_cy = float(src_pts[min(454, n - 1)][1]) + VERT_OFFSET_PX
+        sigma = face_w * 0.16
+    else:
+        # 68-pt fallback: estimate from cheek_left/cheek_right group centroids
+        ck_l = groups.get("cheek_left", groups.get("jaw_left", []))
+        ck_r = groups.get("cheek_right", groups.get("jaw_right", []))
+        ctr_l = np.mean([src_pts[i] for i in ck_l if i < n], axis=0) if ck_l else np.array([w * 0.28, h * 0.52])
+        ctr_r = np.mean([src_pts[i] for i in ck_r if i < n], axis=0) if ck_r else np.array([w * 0.72, h * 0.52])
+        left_cx, left_cy   = float(ctr_l[0]), float(ctr_l[1]) + VERT_OFFSET_PX
+        right_cx, right_cy = float(ctr_r[0]), float(ctr_r[1]) + VERT_OFFSET_PX
+        sigma = abs(right_cx - left_cx) * 0.16
+
+    sigma = max(sigma, 18.0)
+
+    # Gaussian spots — tighter sigma keeps colour off the eyelid
+    yy, xx = np.mgrid[0:h, 0:w].astype(np.float32)
+    s2 = 2.0 * sigma * sigma
+    spot_l = np.exp(-((xx - left_cx) ** 2 + (yy - left_cy) ** 2) / s2)
+    spot_r = np.exp(-((xx - right_cx) ** 2 + (yy - right_cy) ** 2) / s2)
+    combined = np.clip(spot_l + spot_r, 0.0, 1.0).astype(np.float32)
+
+    # Heavier blur (larger kernel) for very soft, natural cheek-flush falloff
+    blur_k = max(int(sigma * 0.60) | 1, 21)
+    combined = cv2.GaussianBlur(combined, (blur_k * 2 + 1, blur_k * 2 + 1), blur_k * 0.5)
+
+    # Non-linear strength; maximum ~30 % blend — subtle natural flush
+    dc = float(blush) ** 0.70
+    alpha_max = 0.30
+    mask3 = (combined * dc * alpha_max)[..., np.newaxis]
+
+    # Blush layer: warm rose-peach BGR = (100, 80, 200)
+    blush_layer = np.empty_like(image, dtype=np.float32)
+    blush_layer[..., 0] = 100.0   # B
+    blush_layer[..., 1] = 80.0    # G
+    blush_layer[..., 2] = 200.0   # R
+
+    result = image.astype(np.float32) * (1.0 - mask3) + blush_layer * mask3
+    return np.clip(result, 0, 255).astype(np.uint8)
+
+
 def _apply_expression_warp(
     image: np.ndarray,
     smile: float,
@@ -4318,6 +4456,8 @@ def api_transform():
         slim        = float(request.form.get("slim",         0))
         face_fullness = float(request.form.get("face_fullness", 0))
         eye_size    = float(request.form.get("eye_size",     0))
+        lip_tint    = float(request.form.get("lip_tint",     0))
+        blush       = float(request.form.get("blush",        0))
     except ValueError:
         return _error("Invalid slider values.", 400)
 
@@ -4333,6 +4473,8 @@ def api_transform():
     slim          = _norm(slim)
     face_fullness = _norm(face_fullness)
     eye_size      = _norm(eye_size)
+    lip_tint      = _norm(lip_tint)
+    blush         = _norm(blush)
 
     warp_mode = (request.form.get("mode", "delaunay") or "delaunay").strip().lower()
     if warp_mode not in {"delaunay", "tps", "flow"}:
@@ -4350,7 +4492,7 @@ def api_transform():
     show_grid = request.form.get("show_grid", "0").strip() in {"1", "true", "yes"}
 
     # ── Fast path: all sliders at zero → return original immediately ──────
-    if smile == 0.0 and brow == 0.0 and lip == 0.0 and slim == 0.0 and face_fullness == 0.0 and eye_size == 0.0:
+    if smile == 0.0 and brow == 0.0 and lip == 0.0 and slim == 0.0 and face_fullness == 0.0 and eye_size == 0.0 and lip_tint == 0.0 and blush == 0.0:
         h_orig, w_orig = image.shape[:2]
         try:
             encoded_orig = _encode_base64_jpeg(image)
@@ -4391,6 +4533,17 @@ def api_transform():
         eye_size=eye_size,
     )
 
+    # ── Final-Overlay: pixel-level colour passes (after geometry warp) ─────────
+    color_active = False
+    if abs(lip_tint) >= 1e-4 or abs(blush) >= 1e-4:
+        # Re-extract landmarks on the *original* (pre-warp) image for mask accuracy
+        src_pts_color, groups_color = _extract_landmarks_for_warp(image)
+        if abs(lip_tint) >= 1e-4:
+            result = _apply_lip_tint(result, src_pts_color, groups_color, lip_tint)
+        if abs(blush) >= 1e-4:
+            result = _apply_blush_effect(result, src_pts_color, groups_color, blush)
+        color_active = True
+
     h, w = result.shape[:2]
     try:
         encoded = _encode_base64_jpeg(result)
@@ -4417,6 +4570,7 @@ def api_transform():
             "debug":             debug_paths,
             "durationMs":        round(elapsed_ms, 2),
             "facialVolumeApplied": abs(face_fullness) >= 1e-4,
+            "colorProcessingActive": color_active,
         }
     )
 

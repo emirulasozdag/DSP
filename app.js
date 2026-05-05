@@ -1122,6 +1122,8 @@ const sliders = [
   { id: 'sSlim', valId: 'vSlim' },
   { id: 'sFaceFullness', valId: 'vFaceFullness' },
   { id: 'sEyeSize', valId: 'vEyeSize' },
+  { id: 'sLipTint', valId: 'vLipTint' },
+  { id: 'sBlush', valId: 'vBlush' },
 ];
 sliders.forEach(({ id, valId }) => {
   const s = $(`#${id}`), v = $(`#${valId}`);
@@ -1204,6 +1206,15 @@ function updateExprMetrics(data) {
   setM('mcTriVal', 'mcTri', data.triangleCount != null ? String(data.triangleCount) : '—');
   setM('mcMethodVal', 'mcMethod', data.method ? data.method.toUpperCase() : '—');
 
+  // Color Processing indicator
+  const colorDot = document.getElementById('mcColorDot');
+  const colorVal = document.getElementById('mcColorVal');
+  const colorCard = document.getElementById('mcColorStatus');
+  const colorActive = !!data.colorProcessingActive;
+  if (colorVal) colorVal.textContent = colorActive ? 'Active' : 'Inactive';
+  if (colorDot) colorDot.classList.toggle('color-status-dot-on', colorActive);
+  if (colorCard) colorCard.classList.toggle('color-status-active', colorActive);
+
   const stream = document.getElementById('exprLiveStream');
   if (stream) {
     // Remove placeholder row if present
@@ -1213,7 +1224,8 @@ function updateExprMetrics(data) {
     const row = document.createElement('div');
     row.className = 'ls-row';
     const volFlag = data.facialVolumeApplied ? ' \xb7vol' : '';
-    row.innerHTML = `<span class="ls-ts">${now}</span><span class="ls-val">moved=${data.movedPoints ?? '?'} maxD=${data.maxDisplacement != null ? Number(data.maxDisplacement).toFixed(1) : '?'}px${volFlag} [${(data.method || '?').slice(0, 3).toUpperCase()}]</span>`;
+    const colorFlag = data.colorProcessingActive ? ' \xb7clr' : '';
+    row.innerHTML = `<span class="ls-ts">${now}</span><span class="ls-val">moved=${data.movedPoints ?? '?'} maxD=${data.maxDisplacement != null ? Number(data.maxDisplacement).toFixed(1) : '?'}px${volFlag}${colorFlag} [${(data.method || '?').slice(0, 3).toUpperCase()}]</span>`;
     stream.insertBefore(row, stream.firstChild);
     while (stream.children.length > 18) stream.removeChild(stream.lastChild);
   }
@@ -1374,7 +1386,9 @@ function startLiveMode() {
     const doubleChin = 0;  // merged into Facial Volume (backend handles coupling)
     const faceFullness = Number($('#sFaceFullness')?.value || 0);
     const eyeSize = Number($('#sEyeSize')?.value || 0);
-    if (smile === 0 && brow === 0 && lip === 0 && slim === 0 && faceFullness === 0 && eyeSize === 0) return;
+    const lipTint = Number($('#sLipTint')?.value || 0);
+    const blush = Number($('#sBlush')?.value || 0);
+    if (smile === 0 && brow === 0 && lip === 0 && slim === 0 && faceFullness === 0 && eyeSize === 0 && lipTint === 0 && blush === 0) return;
     _liveProcessing = true;
     try {
       webcamCanvas.width = webcamVideo.videoWidth || 640;
@@ -1390,6 +1404,8 @@ function startLiveMode() {
       fd.append('slim', String(slim));
       fd.append('face_fullness', String(faceFullness));
       fd.append('eye_size', String(eyeSize));
+      fd.append('lip_tint', String(lipTint));
+      fd.append('blush', String(blush));
       fd.append('mode', 'delaunay');
       const res = await fetch('/api/transform', { method: 'POST', body: fd });
       const data = await res.json();
@@ -1916,6 +1932,8 @@ if ($('#btnApplyExpr')) $('#btnApplyExpr').addEventListener('click', async funct
     fd.append('slim', String(Number($('#sSlim')?.value || 0)));
     fd.append('face_fullness', String(Number($('#sFaceFullness')?.value || 0)));
     fd.append('eye_size', String(Number($('#sEyeSize')?.value || 0)));
+    fd.append('lip_tint', String(Number($('#sLipTint')?.value || 0)));
+    fd.append('blush', String(Number($('#sBlush')?.value || 0)));
     fd.append('show_grid', ($('#toggleMesh')?.checked) ? '1' : '0');
     fd.append('mode', $('#sWarpMethod')?.value || 'delaunay');
     fd.append('interpolation', 'bicubic');

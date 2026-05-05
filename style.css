@@ -3886,6 +3886,50 @@ textarea {
   flex-shrink: 0;
 }
 
+.acc-badge-color {
+  background: rgba(139, 92, 246, 0.15);
+  color: var(--accent);
+}
+
+/* Color-themed range slider track tint */
+.param-slider-color::-webkit-slider-thumb {
+  background: var(--slider-color, var(--accent));
+}
+
+.param-slider-color::-moz-range-thumb {
+  background: var(--slider-color, var(--accent));
+}
+
+/* Color Processing indicator in metrics panel */
+.color-status-dot {
+  display: inline-block;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: rgba(255, 255, 255, .2);
+  margin-right: 5px;
+  flex-shrink: 0;
+  transition: background 0.3s ease;
+}
+
+.color-status-dot-on {
+  background: var(--accent);
+  box-shadow: 0 0 6px rgba(139, 92, 246, .7);
+}
+
+.metric-color-status.color-status-active {
+  border-color: rgba(139, 92, 246, .35);
+}
+
+.metric-color-status .metric-wide-val {
+  color: rgba(255, 255, 255, .45);
+  transition: color 0.3s ease;
+}
+
+.metric-color-status.color-status-active .metric-wide-val {
+  color: var(--accent);
+}
+
 .acc-icon {
   width: 14px;
   height: 14px;

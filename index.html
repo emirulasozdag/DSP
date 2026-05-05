@@ -1459,6 +1459,73 @@
             </div>
           </details>
 
+          <!-- ── Accordion: Aesthetic Enhancements ────────────────── -->
+          <details class="acc-section acc-section-aesthetic">
+            <summary>
+              <svg class="acc-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
+                stroke-linecap="round" stroke-linejoin="round">
+                <path
+                  d="M20.84 4.61a5.5 5.5 0 0 0-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 0 0-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 0 0 0-7.78z" />
+                <circle cx="12" cy="12" r="3" fill="currentColor" opacity=".3" />
+              </svg>
+              Aesthetic Enhancements
+              <span class="acc-badge acc-badge-color">2</span>
+            </summary>
+            <div class="acc-body">
+
+              <!-- Lip Tint -->
+              <div class="param-ctrl">
+                <div class="param-header">
+                  <div class="param-icon-wrap">
+                    <svg viewBox="0 0 32 32" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"
+                      stroke-linejoin="round">
+                      <path d="M8 18 Q12 23 16 22 Q20 23 24 18" />
+                      <path d="M8 18 Q12 14 16 15 Q20 14 24 18" stroke-opacity=".3" />
+                      <ellipse cx="16" cy="20" rx="8" ry="3.5" fill="rgba(139,92,246,.18)" stroke="rgba(139,92,246,.55)" />
+                    </svg>
+                  </div>
+                  <div class="param-info">
+                    <span class="param-name">Lip Tint</span>
+                    <span class="param-micro">Rose overlay &middot; texture preserved</span>
+                  </div>
+                  <span class="param-val" id="vLipTint">0%</span>
+                </div>
+                <div class="param-track-wrap">
+                  <input type="range" min="0" max="100" value="0" class="param-slider param-slider-color" id="sLipTint"
+                    style="--pct:0%" />
+                  <div class="param-tick-row">
+                    <span>0</span><span>25</span><span>50</span><span>75</span><span>100</span></div>
+                </div>
+              </div>
+
+              <!-- Blush Effect -->
+              <div class="param-ctrl">
+                <div class="param-header">
+                  <div class="param-icon-wrap">
+                    <svg viewBox="0 0 32 32" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"
+                      stroke-linejoin="round">
+                      <ellipse cx="10" cy="19" rx="6" ry="4" fill="rgba(139,92,246,.15)" stroke="rgba(139,92,246,.45)" />
+                      <ellipse cx="22" cy="19" rx="6" ry="4" fill="rgba(139,92,246,.15)" stroke="rgba(139,92,246,.45)" />
+                      <ellipse cx="16" cy="14" rx="8" ry="10" stroke-opacity=".15" />
+                    </svg>
+                  </div>
+                  <div class="param-info">
+                    <span class="param-name">Blush Effect</span>
+                    <span class="param-micro">Gaussian cheek flush &middot; landmarks 205 &amp; 425</span>
+                  </div>
+                  <span class="param-val" id="vBlush">0%</span>
+                </div>
+                <div class="param-track-wrap">
+                  <input type="range" min="0" max="100" value="0" class="param-slider param-slider-color" id="sBlush"
+                    style="--pct:0%" />
+                  <div class="param-tick-row">
+                    <span>0</span><span>25</span><span>50</span><span>75</span><span>100</span></div>
+                </div>
+              </div>
+
+            </div>
+          </details>
+
           <div class="ctrl-divider"></div>
 
           <div class="card-head">
@@ -1665,6 +1732,15 @@
               <div class="metric-card-wide" id="mcMethod">
                 <span class="metric-wide-lbl">Method</span>
                 <span class="metric-wide-val" id="mcMethodVal">—</span>
+              </div>
+            </div>
+            <div style="margin-top:7px">
+              <div class="metric-card-wide metric-color-status" id="mcColorStatus">
+                <span class="metric-wide-lbl">
+                  <span class="color-status-dot" id="mcColorDot"></span>
+                  Color Processing
+                </span>
+                <span class="metric-wide-val" id="mcColorVal">Inactive</span>
               </div>
             </div>
           </div>
