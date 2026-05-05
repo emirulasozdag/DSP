@@ -3385,6 +3385,7 @@ def api_aging():
         detail = float(request.form.get("detail", 0.5))
         deterministic = _parse_bool(request.form.get("deterministic", "true"), default=True)
         preserve_edges = _parse_bool(request.form.get("preserveEdges"), default=True)
+        save_debug = _parse_bool(request.form.get("debug", "false"), default=False)
     except ValueError:
         return _error("Invalid aging parameters.", 400)
 
