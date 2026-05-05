@@ -2377,6 +2377,10 @@ textarea {
   margin-bottom: 14px;
 }
 
+.aging-opts-grid.aging-opts-grid-single {
+  grid-template-columns: 1fr;
+}
+
 .aging-opt-label {
   font-size: 0.66rem;
   text-transform: uppercase;

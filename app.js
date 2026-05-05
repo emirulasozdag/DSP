@@ -872,6 +872,34 @@ function syncLandmarkPhotoBg() {
   const has = Boolean(appState.imageDataUrl);
   img.src = has ? appState.imageDataUrl : '';
   img.style.display = has ? 'block' : 'none';
+
+  // Match canvas aspect ratio to the photo so it scales proportionally to the
+  // available column width instead of being stretched flat by object-fit:fill.
+  // Landmark math uses the bg image's bounding rect, which is now correctly
+  // shaped, so overlay alignment is preserved.
+  if (has) {
+    const probe = new Image();
+    probe.onload = () => {
+      const w = probe.naturalWidth;
+      const h = probe.naturalHeight;
+      if (w > 0 && h > 0) {
+        lmCanvas.style.aspectRatio = `${w} / ${h}`;
+        lmCanvas.style.minHeight = '0';
+        if (backendState.landmarksLoaded && backendState.lastLmData) {
+          const data = backendState.lastLmData;
+          const src68 = (Array.isArray(data.reduced68) && data.reduced68.length) ? data.reduced68 : data.landmarks;
+          const srcMesh = (Array.isArray(data.rawLandmarks) && data.rawLandmarks.length) ? data.rawLandmarks : src68;
+          const p68 = (src68 || []).map(p => ({ x: p.x, y: p.y, imageWidth: data.width, imageHeight: data.height }));
+          const pMesh = (srcMesh || []).map(p => ({ x: p.x, y: p.y, imageWidth: data.width, imageHeight: data.height }));
+          applyLandmarksToSvg(p68, pMesh);
+        }
+      }
+    };
+    probe.src = appState.imageDataUrl;
+  } else {
+    lmCanvas.style.aspectRatio = '';
+    lmCanvas.style.minHeight = '';
+  }
 }
 
 function ensureExpressionPhotoElements() {
@@ -1980,11 +2008,13 @@ if ($('#btnSimulate')) $('#btnSimulate').addEventListener('click', async functio
     if (!srcBlob) throw new Error('No source image found for aging.');
 
     const selectedMethod = $('#ageMethod .seg-btn.active')?.dataset.v || 'freq';
+    const yearsSigned = Number($('#sTargetAge')?.value || 10);
+    const agingMode = yearsSigned < 0 ? 'deaging' : 'aging';
     const fd = new FormData();
     fd.append('image', srcBlob, 'aging-input.jpg');
-    fd.append('mode', $('#ageMode .seg-btn.active')?.dataset.v || 'aging');
+    fd.append('mode', agingMode);
     fd.append('method', selectedMethod);
-    fd.append('years', String(Number($('#sTargetAge')?.value || 10)));
+    fd.append('years', String(Math.abs(yearsSigned)));
     fd.append('strength', String(Number($('#sAge')?.value || 50) / 100));
     fd.append('contrast', String(Number($('#sContrast')?.value || 50) / 100));
     fd.append('tone', String(Number($('#sTone')?.value || 50) / 100));
