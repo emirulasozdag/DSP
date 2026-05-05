@@ -1374,6 +1374,21 @@
 
           <div class="select-wrap">
             <label class="select-label">
+              Expression Source
+              <span class="info-tip" tabindex="0" role="tooltip" aria-label="Expression source info">&#x24D8;
+                <span class="info-tip-popup"><strong>Manual Sliders</strong> uses the controls above. <strong>Reference
+                    Only</strong> ignores slider values and copies the uploaded reference expression.</span>
+              </span>
+            </label>
+            <select id="sExprMode" class="select">
+              <option value="manual" selected>Manual Sliders</option>
+              <option value="reference-only">Reference Only</option>
+            </select>
+            <span class="select-micro">Choose whether expression comes from sliders or the reference image</span>
+          </div>
+
+          <div class="select-wrap">
+            <label class="select-label">
               Warp Method
               <span class="info-tip" tabindex="0" role="tooltip" aria-label="Warp method info">&#x24D8;
                 <span class="info-tip-popup">Determines the mathematical algorithm that maps source landmark positions

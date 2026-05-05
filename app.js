@@ -81,6 +81,7 @@ const backendState = {
   analysisData: null,
   analysisSpectra: null,
   spectrumMode: 'mag',
+  expressionMode: 'manual',
 };
 
 function mapLandmarkMethodLabel(method, conf) {
@@ -1167,6 +1168,19 @@ function updateExprSvg() {
   backendState.analysisLoaded = false;
 }
 
+function setReferenceTransferReadout(data) {
+  const params = $('#exprParams');
+  if (!params) return;
+  const moved = Number(data?.movedPoints || 0);
+  const maxD = Number(data?.maxDisplacement || 0);
+  const tri = Number(data?.triangleCount || 0);
+  params.innerHTML =
+    `<span>Ref: ${moved} pts</span>` +
+    `<span>MaxD: ${Number.isFinite(maxD) ? maxD.toFixed(1) : '0.0'}</span>` +
+    `<span>Tri: ${Number.isFinite(tri) ? tri : 0}</span>` +
+    `<span>Mode: Ref</span>`;
+}
+
 if ($('#btnResetExpr')) $('#btnResetExpr').addEventListener('click', () => {
   sliders.forEach(({ id, valId }) => {
     const s = $(`#${id}`), v = $(`#${valId}`);
@@ -1377,17 +1391,45 @@ function loadRefImage(file) {
   if (!['image/jpeg', 'image/png'].includes(file.type)) { toast('Only JPG/PNG accepted.', 'error'); return; }
   const reader = new FileReader();
   reader.onload = e => {
-    refImg.src = e.target.result;
-    refDrop.style.display = 'none';
-    refPreview.style.display = 'flex';
+    if (refImg) refImg.src = e.target.result;
+    if (refDrop) refDrop.style.display = 'none';
+    if (refPreview) refPreview.style.display = 'flex';
   };
   reader.readAsDataURL(file);
 }
 if ($('#btnClearRef')) $('#btnClearRef').addEventListener('click', () => {
-  refImg.src = '';
-  refInput.value = '';
-  refPreview.style.display = 'none';
-  refDrop.style.display = 'flex';
+  if (refImg) refImg.src = '';
+  if (refInput) refInput.value = '';
+  if (refPreview) refPreview.style.display = 'none';
+  if (refDrop) refDrop.style.display = 'flex';
+});
+
+function getExpressionMode() {
+  const mode = $('#sExprMode')?.value || 'manual';
+  return mode === 'reference-only' ? 'reference-only' : 'manual';
+}
+
+function syncExpressionModeUi() {
+  const mode = getExpressionMode();
+  backendState.expressionMode = mode;
+  const isReferenceOnly = mode === 'reference-only';
+  const applyBtn = $('#btnApplyExpr');
+  if (applyBtn && !applyBtn.disabled) {
+    applyBtn.innerHTML = isReferenceOnly
+      ? '<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polygon points="5 3 19 12 5 21 5 3" /></svg> Apply Reference'
+      : '<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polygon points="5 3 19 12 5 21 5 3" /></svg> Apply Warp';
+  }
+  $$('#page-expression .param-slider').forEach(slider => {
+    slider.disabled = isReferenceOnly;
+  });
+}
+
+if ($('#sExprMode')) $('#sExprMode').addEventListener('change', () => {
+  syncExpressionModeUi();
+  toast(getExpressionMode() === 'reference-only'
+    ? 'Reference Only mode enabled. Upload a reference face, then apply.'
+    : 'Manual slider mode enabled.',
+    'info');
 });
 
 /* ═══════════════════ RADIO CARDS ═══════════════════ */
@@ -1695,12 +1737,21 @@ if ($('#btnCompareAging')) $('#btnCompareAging').addEventListener('click', () =>
 });
 
 /* ═══════════════════ EXPRESSION TRANSFER ═══════════════════ */
-if ($('#btnApplyTransfer')) $('#btnApplyTransfer').addEventListener('click', async function () {
-  if (!appState.imageDataUrl) { toast('Upload a target image first.', 'warning'); return; }
-  const refSrc = $('#refImg')?.src;
-  if (!refSrc || refSrc === window.location.href) { toast('Upload a reference expression image first.', 'warning'); return; }
+async function getReferenceImageBlob() {
+  const file = refInput?.files?.[0];
+  if (file) return file;
+  const refSrc = refImg?.src;
+  if (!refSrc || refSrc === window.location.href) return null;
+  const refResp = await fetch(refSrc);
+  return refResp.blob();
+}
 
-  const btn = this;
+async function runReferenceExpressionTransfer(buttonEl) {
+  if (!appState.imageDataUrl) { toast('Upload a target image first.', 'warning'); return; }
+  const refBlob = await getReferenceImageBlob();
+  if (!refBlob) { toast('Upload a reference expression image first.', 'warning'); return; }
+
+  const btn = buttonEl;
   const prev = btn.innerHTML;
   btn.disabled = true;
   btn.textContent = '\u29d7 Transferring…';
@@ -1708,9 +1759,6 @@ if ($('#btnApplyTransfer')) $('#btnApplyTransfer').addEventListener('click', asy
   try {
     const targetBlob = await getCurrentImageBlob();
     if (!targetBlob) throw new Error('No target image available.');
-    const refResp = await fetch(refSrc);
-    const refBlob = await refResp.blob();
-
     const fd = new FormData();
     fd.append('target', targetBlob, appState.fileName || 'target.jpg');
     fd.append('reference', refBlob, 'reference.jpg');
@@ -1725,19 +1773,30 @@ if ($('#btnApplyTransfer')) $('#btnApplyTransfer').addEventListener('click', asy
     backendState.lastAgingDataUrl = '';
     backendState.analysisLoaded = false;
     backendState.analysisData = null;
+    backendState.analysisSpectra = null;
     renderExpressionCanvasFromDataUrl(outUrl);
+    setReferenceTransferReadout(data);
     toast(`Expression transferred \u00b7 ${data.durationMs || 0} ms \u00b7 ${data.triangleCount ?? '?'} tri`, 'success');
   } catch (err) {
     toast(`Transfer error: ${err.message}`, 'error');
   } finally {
     btn.disabled = false;
     btn.innerHTML = prev;
+    syncExpressionModeUi();
   }
+}
+
+if ($('#btnApplyTransfer')) $('#btnApplyTransfer').addEventListener('click', function () {
+  runReferenceExpressionTransfer(this);
 });
 
 /* ═══════════════════ APPLY WARP FEEDBACK ═══════════════════ */
 if ($('#btnApplyExpr')) $('#btnApplyExpr').addEventListener('click', async function () {
   if (!appState.imageDataUrl) { toast('Upload an image first.', 'warning'); return; }
+  if (getExpressionMode() === 'reference-only') {
+    await runReferenceExpressionTransfer(this);
+    return;
+  }
 
   const btn = this;
   const prevText = btn.innerHTML;
@@ -1769,6 +1828,7 @@ if ($('#btnApplyExpr')) $('#btnApplyExpr').addEventListener('click', async funct
     backendState.lastAgingDataUrl = '';
     backendState.analysisLoaded = false;
     backendState.analysisData = null;
+    backendState.analysisSpectra = null;
     renderExpressionCanvasFromDataUrl(outUrl);
     toast(`Warped · ${data.method || 'delaunay'} · ${data.usedLandmarkCount ?? '?'} pts · moved ${data.movedPoints ?? '?'} · maxD ${data.maxDisplacement != null ? Number(data.maxDisplacement).toFixed(1) : '?'} · ${data.triangleCount ?? '?'} tri · ${data.durationMs || 0} ms`, 'success');
   } catch (err) {
@@ -1776,6 +1836,7 @@ if ($('#btnApplyExpr')) $('#btnApplyExpr').addEventListener('click', async funct
   } finally {
     btn.disabled = false;
     btn.innerHTML = prevText;
+    syncExpressionModeUi();
   }
 });
 
@@ -1928,6 +1989,7 @@ function updateAnalysisMetrics() {
 }
 
 setPipelineImage('');
+syncExpressionModeUi();
 updateAnalysisMetrics();
 syncMethodCompareVisibility();
 

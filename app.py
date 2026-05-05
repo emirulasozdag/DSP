@@ -1664,6 +1664,159 @@ def _get_68_pts_for_warp(image: np.ndarray) -> tuple[np.ndarray, str]:
     return pts, "fallback"
 
 
+def _estimate_expression_sliders_from_68(pts68: np.ndarray, strength: float = 0.6) -> dict:
+    """
+    Estimate only expression-style controls from a 68-point reference face.
+
+    This intentionally avoids transferring jaw, eye, nose, or full landmark
+    identity offsets. Different people and poses should not be interpreted as
+    expression, otherwise reference-only mode can wildly reshape the target.
+    """
+    if pts68 is None or len(pts68) < 68:
+        return {"smile": 0.0, "brow": 0.0, "lip": 0.0, "slim": 0.0}
+
+    pts = pts68.astype(np.float32)
+    min_x = float(np.min(pts[:, 0]))
+    max_x = float(np.max(pts[:, 0]))
+    min_y = float(np.min(pts[:, 1]))
+    max_y = float(np.max(pts[:, 1]))
+    face_w = max(max_x - min_x, 1.0)
+    face_h = max(max_y - min_y, 1.0)
+
+    def point(i: int) -> np.ndarray:
+        return pts[min(max(i, 0), len(pts) - 1)]
+
+    mouth = pts[48:68]
+    mouth_outer = pts[48:60]
+    mouth_left = point(48)
+    mouth_right = point(54)
+    mouth_width = float(np.linalg.norm(mouth_right - mouth_left) / face_w)
+    corner_y = float((mouth_left[1] + mouth_right[1]) * 0.5)
+    mouth_mid_y = float(np.median(mouth_outer[:, 1]))
+    corner_lift = (mouth_mid_y - corner_y) / face_h
+
+    upper_lip_y = float(np.mean([point(i)[1] for i in (50, 51, 52, 61, 62, 63)]))
+    lower_lip_y = float(np.mean([point(i)[1] for i in (56, 57, 58, 65, 66, 67)]))
+    mouth_open = max(0.0, (lower_lip_y - upper_lip_y) / face_h)
+
+    brow_y = float(np.mean(pts[17:27, 1]))
+    eye_y = float(np.mean(pts[36:48, 1]))
+    brow_gap = max(0.0, (eye_y - brow_y) / face_h)
+
+    smile = _clamp(((corner_lift - 0.010) / 0.075) + max(0.0, mouth_open - 0.045) * 1.6, 0.0, 0.75)
+    lip = _clamp((mouth_width - 0.34) / 0.22, 0.0, 0.45)
+    brow = _clamp((brow_gap - 0.18) / 0.12, 0.0, 0.55)
+
+    gain = _clamp(float(strength), 0.1, 1.0)
+    params = {
+        "smile": float(smile * gain),
+        "brow": float(brow * gain),
+        "lip": float(lip * gain),
+        "slim": 0.0,
+    }
+    for key, value in list(params.items()):
+        if abs(value) < 0.025:
+            params[key] = 0.0
+    return params
+
+
+def _build_reference_expression_dst_68(
+    ref_pts: np.ndarray,
+    tgt_pts: np.ndarray,
+    strength: float,
+    target_w: int,
+    target_h: int,
+) -> tuple[np.ndarray, int, float, list[int]]:
+    """
+    Transfer only expression-bearing 68-point landmark regions.
+
+    Full 68-point displacement copies identity, head pose, jaw width, and other
+    person-specific structure. This helper keeps the target identity stable by
+    applying reference-vs-neutral displacement only to brows, lips, and a tiny
+    cheek/eyelid support set.
+    """
+    dst = tgt_pts.astype(np.float32).copy()
+    ref = ref_pts.astype(np.float32)
+    tgt = tgt_pts.astype(np.float32)
+
+    ref_min = ref.min(axis=0)
+    ref_max = ref.max(axis=0)
+    ref_face_w = max(float(ref_max[0] - ref_min[0]), 1.0)
+    ref_face_h = max(float(ref_max[1] - ref_min[1]), 1.0)
+
+    tgt_min = tgt.min(axis=0)
+    tgt_max = tgt.max(axis=0)
+    tgt_face_w = max(float(tgt_max[0] - tgt_min[0]), 1.0)
+    tgt_face_h = max(float(tgt_max[1] - tgt_min[1]), 1.0)
+    target_face_size = max(tgt_face_w, tgt_face_h)
+
+    det_ref = _detect_face_bbox_from_points(ref)
+    neutral_ref = np.array(
+        [[float(x), float(y)]
+         for x, y in _synthetic_68_landmarks_from_bbox(
+             det_ref[0], det_ref[1], det_ref[2], det_ref[3],
+             int(max(ref_max[0] + 2, ref_face_w + ref_min[0] + 2)),
+             int(max(ref_max[1] + 2, ref_face_h + ref_min[1] + 2)),
+         )],
+        dtype=np.float32,
+    )
+
+    strength = _clamp(float(strength), 0.1, 1.0)
+    moved: set[int] = set()
+
+    def apply_indices(indices: list[int], gain: float, cap_frac: float) -> None:
+        cap = cap_frac * target_face_size
+        for i in indices:
+            if i >= len(ref) or i >= len(tgt) or i >= len(neutral_ref):
+                continue
+            disp_ref = ref[i] - neutral_ref[i]
+            disp = np.array([
+                (disp_ref[0] / ref_face_w) * tgt_face_w,
+                (disp_ref[1] / ref_face_h) * tgt_face_h,
+            ], dtype=np.float32) * strength * gain
+            mag = float(np.linalg.norm(disp))
+            if mag > cap and mag > 1e-6:
+                disp *= cap / mag
+            dst[i] = tgt[i] + disp
+            moved.add(int(i))
+
+    mouth_outer = list(range(48, 60))
+    mouth_inner = list(range(60, 68))
+    brows = list(range(17, 27))
+    eyelid_support = [37, 38, 43, 44]
+    cheek_support = [3, 4, 12, 13]
+
+    apply_indices(mouth_outer, gain=1.10, cap_frac=0.18)
+    apply_indices(mouth_inner, gain=1.25, cap_frac=0.20)
+    apply_indices(brows, gain=0.75, cap_frac=0.09)
+    apply_indices(eyelid_support, gain=0.22, cap_frac=0.035)
+    apply_indices(cheek_support, gain=0.18, cap_frac=0.035)
+
+    # Keep identity-critical anchors pinned even with expressive references.
+    for i in list(range(27, 36)) + list(range(36, 48)) + list(range(0, 17)):
+        if i not in cheek_support and i < len(dst):
+            dst[i] = tgt[i]
+            moved.discard(int(i))
+
+    dst[:, 0] = np.clip(dst[:, 0], 1.0, float(target_w - 2))
+    dst[:, 1] = np.clip(dst[:, 1], 1.0, float(target_h - 2))
+    disp_mag = np.linalg.norm(dst - tgt, axis=1)
+    moved_indices = [int(i) for i in sorted(moved) if disp_mag[i] > 0.25]
+    moved_count = len(moved_indices)
+    max_disp = float(np.max(disp_mag)) if moved_count else 0.0
+    return dst, moved_count, max_disp, moved_indices
+
+
+def _detect_face_bbox_from_points(points: np.ndarray) -> tuple[int, int, int, int]:
+    min_xy = np.min(points, axis=0)
+    max_xy = np.max(points, axis=0)
+    x = int(np.floor(min_xy[0]))
+    y = int(np.floor(min_xy[1]))
+    w = int(np.ceil(max_xy[0] - min_xy[0]))
+    h = int(np.ceil(max_xy[1] - min_xy[1]))
+    return max(0, x), max(0, y), max(1, w), max(1, h)
+
+
 def _build_dst_68_direct(
     src68: np.ndarray,
     smile: float,
@@ -3763,6 +3916,56 @@ def api_expression_transfer():
         return _error("Could not detect sufficient landmarks in one or both images.", 422)
 
     h, w = target.shape[:2]
+    params = _estimate_expression_sliders_from_68(ref_pts, strength=strength)
+    target_dst, moved_pts, max_disp, moved_indices = _build_reference_expression_dst_68(
+        ref_pts, tgt_pts, strength, w, h
+    )
+
+    src_full = _add_boundary_points(tgt_pts, w, h)
+    dst_full = _add_boundary_points(target_dst, w, h)
+    tris = _triangle_indices_from_subdiv(src_full, w, h)
+
+    src_f32 = target.astype(np.float32)
+    warped_f32 = src_f32.copy()
+    for (i, j, k) in tris:
+        t_src = np.array([src_full[i], src_full[j], src_full[k]], dtype=np.float32)
+        t_dst = np.array([dst_full[i], dst_full[j], dst_full[k]], dtype=np.float32)
+        _warp_triangle(src_f32, warped_f32, t_src, t_dst, interp=cv2.INTER_CUBIC)
+    warped = np.clip(warped_f32, 0, 255).astype(np.uint8)
+    result = _blend_warped_face_mask(target, warped, target_dst, w, h)
+    n_lm = len(tgt_pts)
+    tri_count = len(tris)
+    lm_source = f"target-{tgt_method}"
+
+    try:
+        encoded = _encode_base64_jpeg(result)
+    except ValueError as exc:
+        return _error(str(exc), 500)
+
+    saved = _save_image(result, "expr-transfer")
+    elapsed_ms = (time.perf_counter() - started) * 1000.0
+    return jsonify({
+        "ok": True,
+        "image": encoded,
+        "width": int(w),
+        "height": int(h),
+        "refMethod": ref_method,
+        "targetMethod": tgt_method,
+        "landmarkSource": lm_source,
+        "usedLandmarkCount": int(n_lm),
+        "movedPoints": int(moved_pts),
+        "maxDisplacement": round(float(max_disp), 2),
+        "triangleCount": int(tri_count),
+        "transferMode": "reference-expression-only",
+        "expressionParams": {
+            "smile": round(params["smile"], 4),
+            "brow": round(params["brow"], 4),
+            "lip": round(params["lip"], 4),
+            "slim": 0.0,
+        },
+        "saved": saved,
+        "durationMs": round(elapsed_ms, 2),
+    })
 
     # ---------- Neutral reference: synthetic 68pts from detected bbox ----------
     det_ref = _detect_face_bbox(reference)

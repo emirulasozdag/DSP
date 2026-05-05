@@ -2082,6 +2082,11 @@ textarea {
   border-radius: 7px;
 }
 
+#page-expression .param-slider:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
 /* ─── Aging page ─────────────────────────────────────────────── */
 
 /* Amber gradient for hero title accent */
