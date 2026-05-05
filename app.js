@@ -907,6 +907,7 @@ function ensureExpressionPhotoElements() {
       c.style.cssText = [
         'position:absolute', 'inset:0', 'width:100%', 'height:100%',
         'border-radius:12px', 'display:none', 'object-fit:contain', 'background:#0b1220',
+        'z-index:10',
       ].join(';');
       body.prepend(c);
     }
@@ -1119,6 +1120,7 @@ const sliders = [
   { id: 'sBrow', valId: 'vBrow' },
   { id: 'sLip', valId: 'vLip' },
   { id: 'sSlim', valId: 'vSlim' },
+  { id: 'sFaceFullness', valId: 'vFaceFullness' },
 ];
 sliders.forEach(({ id, valId }) => {
   const s = $(`#${id}`), v = $(`#${valId}`);
@@ -1193,6 +1195,12 @@ if ($('#btnResetExpr')) $('#btnResetExpr').addEventListener('click', () => {
 const toggleMesh = $('#toggleMesh'), meshOverlay = $('#meshOverlay');
 if (toggleMesh && meshOverlay) toggleMesh.addEventListener('change', () => {
   meshOverlay.style.opacity = toggleMesh.checked ? '1' : '0';
+  // Re-run warp to bake/remove the deformation grid.
+  // Only fires when an image is loaded and Facial Volume is active.
+  const ff = Number($('#sFaceFullness')?.value || 0);
+  if (appState.imageDataUrl && ff > 0 && getExpressionMode() !== 'reference-only') {
+    $('#btnApplyExpr')?.click();
+  }
 });
 
 /* ═══════════════════ AGING SLIDERS ═══════════════════ */
@@ -1275,7 +1283,9 @@ function startLiveMode() {
     const brow = Number($('#sBrow')?.value || 0);
     const lip = Number($('#sLip')?.value || 0);
     const slim = Number($('#sSlim')?.value || 0);
-    if (smile === 0 && brow === 0 && lip === 0 && slim === 0) return;
+    const doubleChin = 0;  // merged into Facial Volume (backend handles coupling)
+    const faceFullness = Number($('#sFaceFullness')?.value || 0);
+    if (smile === 0 && brow === 0 && lip === 0 && slim === 0 && faceFullness === 0) return;
     _liveProcessing = true;
     try {
       webcamCanvas.width = webcamVideo.videoWidth || 640;
@@ -1289,6 +1299,7 @@ function startLiveMode() {
       fd.append('brow', String(brow));
       fd.append('lip', String(lip));
       fd.append('slim', String(slim));
+      fd.append('face_fullness', String(faceFullness));
       fd.append('mode', 'delaunay');
       const res = await fetch('/api/transform', { method: 'POST', body: fd });
       const data = await res.json();
@@ -1813,6 +1824,8 @@ if ($('#btnApplyExpr')) $('#btnApplyExpr').addEventListener('click', async funct
     fd.append('brow', String(Number($('#sBrow')?.value || 0)));
     fd.append('lip', String(Number($('#sLip')?.value || 0)));
     fd.append('slim', String(Number($('#sSlim')?.value || 0)));
+    fd.append('face_fullness', String(Number($('#sFaceFullness')?.value || 0)));
+    fd.append('show_grid', ($('#toggleMesh')?.checked) ? '1' : '0');
     fd.append('mode', $('#sWarpMethod')?.value || 'delaunay');
     fd.append('interpolation', 'bicubic');
     fd.append('debug', 'false');
@@ -1830,7 +1843,8 @@ if ($('#btnApplyExpr')) $('#btnApplyExpr').addEventListener('click', async funct
     backendState.analysisData = null;
     backendState.analysisSpectra = null;
     renderExpressionCanvasFromDataUrl(outUrl);
-    toast(`Warped · ${data.method || 'delaunay'} · ${data.usedLandmarkCount ?? '?'} pts · moved ${data.movedPoints ?? '?'} · maxD ${data.maxDisplacement != null ? Number(data.maxDisplacement).toFixed(1) : '?'} · ${data.triangleCount ?? '?'} tri · ${data.durationMs || 0} ms`, 'success');
+    const volumeTag = data.facialVolumeApplied ? ' · Facial Volume (Non-Linear)' : '';
+    toast(`Warped · ${data.method || 'delaunay'} · ${data.usedLandmarkCount ?? '?'} pts · moved ${data.movedPoints ?? '?'}${volumeTag} · maxD ${data.maxDisplacement != null ? Number(data.maxDisplacement).toFixed(1) : '?'} · ${data.triangleCount ?? '?'} tri · ${data.durationMs || 0} ms`, 'success');
   } catch (err) {
     toast(`Expression transform error: ${err.message}`, 'error');
   } finally {

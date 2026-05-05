@@ -2317,7 +2317,324 @@ def _apply_slimming_flow(
     )
 
 
+# ──────────────────────────────────────────────────────────────────────────────
+# Grid overlay (drawn on input BEFORE warp so TPS bends the lines)
+# ──────────────────────────────────────────────────────────────────────────────
+def _draw_grid(img: np.ndarray, cols: int = 20, rows: int = 20, alpha: float = 0.42) -> np.ndarray:
+    """Return a copy of *img* with a semi-transparent white grid burned in.
+
+    Drawing the grid BEFORE the TPS/Delaunay remap lets the warp bend the
+    grid lines naturally, making the non-linear deformation visible.
+    """
+    h, w = img.shape[:2]
+    overlay = img.copy()
+    white = (255, 255, 255)
+    for c in range(cols + 1):
+        x = int(round(c * w / cols))
+        cv2.line(overlay, (x, 0), (x, h - 1), white, 1, cv2.LINE_AA)
+    for r in range(rows + 1):
+        y = int(round(r * h / rows))
+        cv2.line(overlay, (0, y), (w - 1, y), white, 1, cv2.LINE_AA)
+    return cv2.addWeighted(overlay, alpha, img, 1.0 - alpha, 0)
+
+
+def _apply_double_chin_flow(
+    image: np.ndarray,
+    src_pts: np.ndarray,
+    groups: dict,
+    double_chin: float,
+) -> np.ndarray:
+    """
+    Simulate submental fat (double chin) as a smooth dense inverse-remap field.
+
+    Anchor strategy
+    ---------------
+    Vertical push  (Y ↓): MP-468 indices 152, 175, 199 — bottom chin points.
+    Lateral left   (X ←): MP-468 indices 172, 132 — left jaw lower rim.
+    Lateral right  (X →): MP-468 indices 397, 361 — right jaw lower rim.
+    Neck extension       : synthetic point 20 % of face_h below the chin
+                           centroid so the submental volume spreads into the
+                           upper neck region naturally.
+
+    All anchors fall back to group centroids when running on the 68-pt
+    fallback model (indices out of range).
+
+    Design features
+    ---------------
+    * Per-anchor Gaussian kernels, max-blended → no inter-blob valley.
+    * Separate flow_y (vertical) and flow_x (lateral) fields built from their
+      own anchor sets, then summed.
+    * dc = double_chin^0.65 — non-linear: subtle at low values, capped high.
+    * Sigmoid identity lock above the mouth line (band = 16 % face_h).
+    * GaussianBlur on the final flow fields before cv2.remap.
+    """
+    if abs(double_chin) < 1e-4:
+        return image
+
+    h, w      = image.shape[:2]
+    n_pts     = len(src_pts)
+    face_w    = max(float(np.max(src_pts[:, 0]) - np.min(src_pts[:, 0])), 1.0)
+    face_h    = max(float(np.max(src_pts[:, 1]) - np.min(src_pts[:, 1])), 1.0)
+    dc        = float(double_chin) ** 0.65   # non-linear strength
+
+    xx, yy = np.meshgrid(
+        np.arange(w, dtype=np.float32),
+        np.arange(h, dtype=np.float32),
+    )
+
+    # ── helpers ──────────────────────────────────────────────────────────
+    def _g2d(px, py, rx, ry):
+        return np.exp(
+            -((xx - px) / (rx + 1e-4)) ** 2
+            -((yy - py) / (ry + 1e-4)) ** 2
+        ).astype(np.float32)
+
+    def _safe_pts(indices, fallback_key):
+        """Return list of (x, y) from specific MP-468 indices; fall back to
+        group centroid when indices exceed src_pts length (68-pt model)."""
+        result = [src_pts[i] for i in indices if i < n_pts]
+        if not result:
+            idxs = [i for i in groups.get(fallback_key, []) if i < n_pts]
+            if idxs:
+                result = [src_pts[idxs].mean(axis=0)]
+        return result
+
+    # ── anchor point sets ─────────────────────────────────────────────────
+    # Vertical: 152 (chin bottom), 175 (lower mandible), 199 (very bottom)
+    vert_pts  = _safe_pts([152, 175, 199], "chin")
+    # Lateral left:  172 (jaw lower-left), 132 (jaw mid-left)
+    lat_l_pts = _safe_pts([172, 132], "jaw_left")
+    # Lateral right: 397 (jaw lower-right), 361 (jaw mid-right)
+    lat_r_pts = _safe_pts([397, 361], "jaw_right")
+
+    if not vert_pts:
+        return image
+
+    # ── synthetic submental volume centre (neck extension) ────────────────
+    chin_cx = float(np.mean([p[0] for p in vert_pts]))
+    chin_cy = float(np.mean([p[1] for p in vert_pts]))
+    # 20 % below the chin cluster → upper neck / submental space
+    sub_cx  = chin_cx
+    sub_cy  = chin_cy + face_h * 0.20
+
+    # ── VERTICAL FLOW (flow_y) — inverse remap: negative value → push down ─
+    env_vert = np.zeros((h, w), dtype=np.float32)
+    for p in vert_pts:
+        # Wide horizontal radius so push spans full chin width
+        env_vert = np.maximum(
+            env_vert,
+            _g2d(float(p[0]), float(p[1]), face_w * 0.70, face_h * 0.40),
+        )
+    # Neck extension blob — slightly lighter weight, wider spread
+    env_vert = np.maximum(
+        env_vert,
+        _g2d(sub_cx, sub_cy, face_w * 0.65, face_h * 0.38) * 0.65,
+    )
+    env_vert = np.clip(env_vert, 0.0, 1.0)
+    flow_y   = -env_vert * dc * face_h * 0.080
+
+    # ── LATERAL FLOW (flow_x) — separate envelopes for left / right ───────
+    env_lat_l = np.zeros((h, w), dtype=np.float32)
+    for p in lat_l_pts:
+        env_lat_l = np.maximum(
+            env_lat_l,
+            _g2d(float(p[0]), float(p[1]), face_w * 0.42, face_h * 0.34),
+        )
+    env_lat_r = np.zeros((h, w), dtype=np.float32)
+    for p in lat_r_pts:
+        env_lat_r = np.maximum(
+            env_lat_r,
+            _g2d(float(p[0]), float(p[1]), face_w * 0.42, face_h * 0.34),
+        )
+
+    dx_max  = dc * face_w * 0.055
+    # left side pushes further left (negative x), right side further right
+    flow_x  = (-env_lat_l + env_lat_r) * dx_max
+
+    # ── SIGMOID IDENTITY LOCK — fade to zero above the mouth line ────────
+    mouth_idxs = [i for i in groups.get("inner_upper", []) if i < n_pts]
+    if mouth_idxs:
+        mouth_y = float(src_pts[mouth_idxs, 1].mean())
+    else:
+        mouth_y = float(np.min(src_pts[:, 1])) + face_h * 0.55
+
+    band    = face_h * 0.22   # wider transition = softer jaw boundary
+    sig_arg = np.clip((yy - mouth_y) / (band + 1e-4), -7.0, 7.0)
+    lock    = (1.0 / (1.0 + np.exp(-sig_arg))).astype(np.float32)
+
+    flow_x *= lock
+    flow_y *= lock
+
+    # ── GAUSSIAN BLUR on flow fields — removes residual discontinuities ───
+    ksize      = max(int(face_h * 0.13) | 1, 11)   # odd, ~13 % face height
+    sigma_blur = ksize * 0.50
+    flow_x = cv2.GaussianBlur(flow_x, (ksize, ksize), sigma_blur)
+    flow_y = cv2.GaussianBlur(flow_y, (ksize, ksize), sigma_blur)
+
+    return cv2.remap(
+        image,
+        xx + flow_x,
+        yy + flow_y,
+        interpolation=cv2.INTER_CUBIC,
+        borderMode=cv2.BORDER_REFLECT_101,
+    )
+
+
 # ── Legacy point-displacement helpers (kept for backward compatibility) ────────
+
+
+def _apply_face_fullness_flow(
+    image: np.ndarray,
+    src_pts: np.ndarray,
+    groups: dict,
+    face_fullness: float,
+) -> np.ndarray:
+    """
+    Simulate overall facial fullness ("chubby / fat face") as a dense
+    inverse-remap field.  Pushes cheek and lower-face landmarks radially
+    outward from the face centroid.
+
+    Anchor landmarks (MP-468)
+    -------------------------
+    Cheek left:   50, 123, 117, 118, 101
+    Cheek right: 280, 352, 347, 346, 330
+    These fall back to jaw_left / jaw_right group centroids on the 68-pt model.
+
+    Algorithm
+    ---------
+    1. Build per-anchor Gaussian kernels; max-blend into one "fullness envelope".
+    2. For each pixel compute its outward unit vector from the face centroid.
+    3. Multiply envelope × dc × max_push × unit_vector → forward displacement.
+    4. Apply as INVERSE remap (subtract displacement from sample coords).
+    5. Sigmoid identity lock above the nose tip so eyes/brows/forehead stay still.
+    6. GaussianBlur flow field for smooth transitions.
+    """
+    if abs(face_fullness) < 1e-4:
+        return image
+
+    h, w   = image.shape[:2]
+    n_pts  = len(src_pts)
+    face_w = max(float(np.max(src_pts[:, 0]) - np.min(src_pts[:, 0])), 1.0)
+    face_h = max(float(np.max(src_pts[:, 1]) - np.min(src_pts[:, 1])), 1.0)
+
+    # Non-linear: more visible at low values than the chin slider
+    dc = float(face_fullness) ** 0.60
+
+    xx, yy = np.meshgrid(
+        np.arange(w, dtype=np.float32),
+        np.arange(h, dtype=np.float32),
+    )
+
+    def _g2d(px, py, rx, ry):
+        return np.exp(
+            -((xx - px) / (rx + 1e-4)) ** 2
+            -((yy - py) / (ry + 1e-4)) ** 2
+        ).astype(np.float32)
+
+    def _safe_pts(indices, fallback_key):
+        result = [src_pts[i] for i in indices if i < n_pts]
+        if not result:
+            idxs = [i for i in groups.get(fallback_key, []) if i < n_pts]
+            if idxs:
+                result = [src_pts[idxs].mean(axis=0)]
+        return result
+
+    # ── Cheek anchor sets ─────────────────────────────────────────────────
+    cheek_l_pts = _safe_pts([50, 123, 117, 118, 101], "jaw_left")
+    cheek_r_pts = _safe_pts([280, 352, 347, 346, 330], "jaw_right")
+    all_cheek   = cheek_l_pts + cheek_r_pts
+    if not all_cheek:
+        return image
+
+    # Face centroid (used as the radial expansion origin)
+    face_cx = float(np.mean(src_pts[:, 0]))
+    face_cy = float(np.mean(src_pts[:, 1]))
+
+    # ── Fullness envelope (max-blend all cheek anchors) ───────────────────
+    # Horizontal radius wide enough to cover full cheek + some neck; vertical
+    # radius covers from cheekbone down to jowl.
+    env = np.zeros((h, w), dtype=np.float32)
+    for p in all_cheek:
+        env = np.maximum(
+            env,
+            _g2d(float(p[0]), float(p[1]), face_w * 0.52, face_h * 0.42),
+        )
+    # Additional wide base so the lower face (jowl area) also fills in
+    chin_pts = _safe_pts([152, 175, 199], "chin")
+    env_chin = np.zeros((h, w), dtype=np.float32)  # kept separate for volume coupling
+    for p in chin_pts:
+        blob = _g2d(float(p[0]), float(p[1]), face_w * 0.65, face_h * 0.38) * 0.60
+        env      = np.maximum(env,      blob)
+        env_chin = np.maximum(env_chin, blob)
+    env = np.clip(env, 0.0, 1.0)
+    env_chin = np.clip(env_chin, 0.0, 1.0)
+
+    # ── Radial outward displacement ───────────────────────────────────────
+    # Formula inspired by x = x * (1 + scale/200): push proportional to
+    # distance from centroid, capped so distant pixels don't fly away.
+    dx_raw  = xx - face_cx
+    dy_raw  = yy - face_cy
+    dist    = np.sqrt(dx_raw ** 2 + dy_raw ** 2).astype(np.float32) + 1e-4
+    ux      = (dx_raw / dist).astype(np.float32)   # unit outward X
+    uy      = (dy_raw / dist).astype(np.float32)   # unit outward Y
+
+    max_push_x = dc * face_w * 0.065
+    max_push_y = dc * face_h * 0.034   # less vertical: cheeks expand sideways
+
+    flow_x = -env * ux * max_push_x   # inverse remap: source is inward
+    flow_y = -env * uy * max_push_y
+
+    # ── Volume coupling: cheek expansion → slight chin drop ───────────────
+    # When the cheeks push outward, real fat redistributes and the
+    # submental region sags slightly downward.  Coupling weight: 35 %.
+    flow_y += -env_chin * dc * face_h * 0.022   # additional downward pull
+
+    # ── Sigmoid identity lock — fade to zero above the nose tip ──────────
+    nose_idxs = [i for i in groups.get("nose_tip", []) if i < n_pts]
+    if nose_idxs:
+        nose_y = float(src_pts[nose_idxs, 1].mean())
+    else:
+        nose_y = float(np.min(src_pts[:, 1])) + face_h * 0.42
+
+    band    = face_h * 0.18   # wider transition = smoother blend into forehead
+    sig_arg = np.clip((yy - nose_y) / (band + 1e-4), -7.0, 7.0)
+    lock    = (1.0 / (1.0 + np.exp(-sig_arg))).astype(np.float32)
+
+    flow_x *= lock
+    flow_y *= lock
+
+    # ── Nose anchor lock ──────────────────────────────────────────────────
+    # MP-468 indices 1, 2, 4, 5, 168 mark the nose bridge, alae and tip.
+    # Build an inverse-Gaussian mask that suppresses flow to zero near these
+    # fixed points so the nose never widens regardless of face_fullness value.
+    # Suppression is applied BEFORE the Gaussian blur so the blur naturally
+    # feathers the boundary — no hard edge artifact.
+    _NOSE_ANCHORS = [1, 2, 4, 5, 168]
+    nose_pts = _safe_pts(_NOSE_ANCHORS, "nose_tip")
+    if nose_pts:
+        nose_env = np.zeros((h, w), dtype=np.float32)
+        for p in nose_pts:
+            nose_env = np.maximum(
+                nose_env,
+                _g2d(float(p[0]), float(p[1]), face_w * 0.13, face_h * 0.10),
+            )
+        nose_free = (1.0 - np.clip(nose_env, 0.0, 1.0)).astype(np.float32)
+        flow_x *= nose_free
+        flow_y *= nose_free
+
+    # ── Gaussian blur on flow fields ─────────────────────────────────────
+    ksize      = max(int(face_h * 0.13) | 1, 11)   # odd, ~13 % face height
+    sigma_blur = ksize * 0.50
+    flow_x = cv2.GaussianBlur(flow_x, (ksize, ksize), sigma_blur)
+    flow_y = cv2.GaussianBlur(flow_y, (ksize, ksize), sigma_blur)
+
+    return cv2.remap(
+        image,
+        xx + flow_x,
+        yy + flow_y,
+        interpolation=cv2.INTER_CUBIC,
+        borderMode=cv2.BORDER_REFLECT_101,
+    )
 
 def _falloff_weights(src_points: np.ndarray, anchor_idxs: list, sigma: float) -> np.ndarray:
     """Per-point Gaussian weight: distance from nearest anchor point."""
@@ -2339,6 +2656,7 @@ def _build_dst_landmarks_v2(
     slim: float,
     w: int,
     h: int,
+    double_chin: float = 0.0,
 ) -> np.ndarray:
     """
     Build displaced target landmark set with per-expression Gaussian falloff.
@@ -2448,6 +2766,26 @@ def _build_dst_landmarks_v2(
             "brow_left", "brow_right",
         )
         for key in identity_keys:
+            for i in groups.get(key, []):
+                if 0 <= i < len(src_points):
+                    displacements[i] = 0.0
+
+    # ── DOUBLE CHIN ────────────────────────────────────────────────────────
+    # Push chin / jaw-bottom landmarks downward to simulate submental fat.
+    # We use a narrow sigma so only the lower face tissue moves and the neck
+    # boundary (outside the face hull) stays intact.
+    if abs(double_chin) > 1e-4:
+        dc = float(double_chin)
+        # Primary: chin tip down
+        add_disp(["chin"],      dx=0, dy= dc * 0.055 * face_h, sigma_frac=0.10)
+        # Secondary: jaw bottom fills out laterally + down
+        add_disp(["jaw_left"],  dx=-dc * 0.018 * face_w, dy= dc * 0.030 * face_h, sigma_frac=0.09)
+        add_disp(["jaw_right"], dx= dc * 0.018 * face_w, dy= dc * 0.030 * face_h, sigma_frac=0.09)
+        # Hard-zero identity regions so double_chin never touches eyes/nose/mouth
+        for key in ("nose_tip", "center", "lower_eye_left", "lower_eye_right",
+                    "upper_eyelid_left", "upper_eyelid_right",
+                    "inner_upper", "inner_lower", "upper_lip", "lower_lip",
+                    "brow_left", "brow_right"):
             for i in groups.get(key, []):
                 if 0 <= i < len(src_points):
                     displacements[i] = 0.0
@@ -2902,6 +3240,8 @@ def _apply_expression_warp(
     warp_mode: str = "delaunay",
     save_debug: bool = False,
     interp: int = cv2.INTER_CUBIC,
+    double_chin: float = 0.0,
+    face_fullness: float = 0.0,
 ) -> tuple:
     """
     Anatomical Delaunay expression warp using MediaPipe 468-point mesh.
@@ -2923,7 +3263,7 @@ def _apply_expression_warp(
     Returns (result, debug_paths, used_lm_count, moved_pts, max_disp, tri_count).
     """
     h, w = image.shape[:2]
-    if abs(smile) < 1e-4 and abs(brow) < 1e-4 and abs(lip) < 1e-4 and abs(slim) < 1e-4:
+    if abs(smile) < 1e-4 and abs(brow) < 1e-4 and abs(lip) < 1e-4 and abs(slim) < 1e-4 and abs(double_chin) < 1e-4 and abs(face_fullness) < 1e-4:
         return image.copy(), {}, 0, 0, 0.0, 0, "none"
 
     # 1. Anatomical landmark extraction: full 468-pt MediaPipe mesh with group defs
@@ -2939,8 +3279,11 @@ def _apply_expression_warp(
     #    Smile/brow/lip stay on the anatomical mesh.  Slimming is applied later
     #    as a dense remap because jaw-only Delaunay movement creates visible
     #    cheek-edge artefacts on high-contrast backgrounds.
-    dst_pts_stats = _build_dst_landmarks_v2(src_pts, groups, smile, brow, lip, slim, w, h)
-    dst_pts_mesh = _build_dst_landmarks_v2(src_pts, groups, smile, brow, lip, 0.0, w, h)
+    dst_pts_stats = _build_dst_landmarks_v2(src_pts, groups, smile, brow, lip, slim, w, h, double_chin=double_chin)
+    # double_chin is intentionally excluded from dst_pts_mesh: it is applied
+    # exclusively as a post-pass dense remap in _apply_double_chin_flow.
+    # Including it here too caused double-displacement → stepping artefacts.
+    dst_pts_mesh = _build_dst_landmarks_v2(src_pts, groups, smile, brow, lip, 0.0, w, h, double_chin=0.0)
 
     # 3. Per-point displacement stats used by response fields and debug output
     disp = np.linalg.norm(dst_pts_stats - src_pts, axis=1)
@@ -2961,7 +3304,7 @@ def _apply_expression_warp(
     #    exposed background gap and produce the blue-stripe artefact on the cheeks.
     debug_paths: dict = {}
     has_mesh_expression = (
-        abs(smile) >= 1e-4 or abs(brow) >= 1e-4 or abs(lip) >= 1e-4
+        abs(smile) >= 1e-4 or abs(brow) >= 1e-4 or abs(lip) >= 1e-4 or abs(double_chin) >= 1e-4 or abs(face_fullness) >= 1e-4
     )
 
     if has_mesh_expression:
@@ -2976,7 +3319,7 @@ def _apply_expression_warp(
             # Use boundary-anchored control sets (src_full / dst_full) so the
             # background anchor points keep the warp to zero outside the face.
             warped, tps_map_x, tps_map_y = _tps_remap(
-                image, src_full, dst_full, subsample=4, lam=1e-3
+                image, src_full, dst_full, subsample=4, lam=4e-3
             )
 
             # Apply identity lock: suppress displacement near nose tip & eye
@@ -3035,6 +3378,16 @@ def _apply_expression_warp(
     #    pass.  This keeps the jaw/cheek boundary smooth and avoids the
     #    Delaunay fold-over artefact that made slim output look visually broken.
     result = _apply_slimming_flow(result, src_pts, groups, slim)
+
+    # 9. Apply double chin as a separate dense-remap pass — chin/jaw-bottom
+    #    pushed down with a smooth falloff so neck tissue stretches naturally.
+    if abs(double_chin) >= 1e-4:
+        result = _apply_double_chin_flow(result, src_pts, groups, double_chin)
+
+    # 10. Apply face fullness — cheek anchors pushed radially outward from
+    #     the face centroid, locked above the nose line.
+    if abs(face_fullness) >= 1e-4:
+        result = _apply_face_fullness_flow(result, src_pts, groups, face_fullness)
 
     if save_debug:
         moved_set = set(moved_indices)
@@ -3787,10 +4140,11 @@ def api_transform():
         return _error(str(exc), 400)
 
     try:
-        smile = float(request.form.get("smile", 0))
-        brow  = float(request.form.get("brow",  0))
-        lip   = float(request.form.get("lip",   0))
-        slim  = float(request.form.get("slim",  0))
+        smile       = float(request.form.get("smile",        0))
+        brow        = float(request.form.get("brow",         0))
+        lip         = float(request.form.get("lip",          0))
+        slim        = float(request.form.get("slim",         0))
+        face_fullness = float(request.form.get("face_fullness", 0))
     except ValueError:
         return _error("Invalid slider values.", 400)
 
@@ -3800,10 +4154,11 @@ def api_transform():
             v = v / 100.0
         return float(max(-1.0, min(1.0, v)))
 
-    smile = _norm(smile)
-    brow  = _norm(brow)
-    lip   = _norm(lip)
-    slim  = _norm(slim)
+    smile         = _norm(smile)
+    brow          = _norm(brow)
+    lip           = _norm(lip)
+    slim          = _norm(slim)
+    face_fullness = _norm(face_fullness)
 
     warp_mode = (request.form.get("mode", "delaunay") or "delaunay").strip().lower()
     if warp_mode not in {"delaunay", "tps", "flow"}:
@@ -3818,9 +4173,10 @@ def api_transform():
         "nearest":  cv2.INTER_NEAREST,
     }.get(interp_name, cv2.INTER_CUBIC)
     save_debug = request.form.get("debug", "false").strip().lower() in {"1", "true", "yes"}
+    show_grid = request.form.get("show_grid", "0").strip() in {"1", "true", "yes"}
 
     # ── Fast path: all sliders at zero → return original immediately ──────
-    if smile == 0.0 and brow == 0.0 and lip == 0.0 and slim == 0.0:
+    if smile == 0.0 and brow == 0.0 and lip == 0.0 and slim == 0.0 and face_fullness == 0.0:
         h_orig, w_orig = image.shape[:2]
         try:
             encoded_orig = _encode_base64_jpeg(image)
@@ -3846,11 +4202,18 @@ def api_transform():
             "durationMs": round(elapsed_ms, 2),
         })
 
+    # Burn a grid into the input BEFORE warping so the TPS remap bends the
+    # grid lines — giving a direct visual proof of non-linear deformation.
+    if show_grid and abs(face_fullness) >= 1e-4:
+        image = _draw_grid(image)
+
     result, debug_paths, n_lm, moved_pts, max_disp, tri_count, lm_source = _apply_expression_warp(
         image, smile, brow, lip, slim,
         warp_mode=warp_mode,
         save_debug=save_debug,
         interp=interp_flag,
+        double_chin=face_fullness * 0.30,   # secondary chin coupling: 30 % of volume
+        face_fullness=face_fullness,
     )
 
     h, w = result.shape[:2]
@@ -3878,6 +4241,7 @@ def api_transform():
             "saved":             saved,
             "debug":             debug_paths,
             "durationMs":        round(elapsed_ms, 2),
+            "facialVolumeApplied": abs(face_fullness) >= 1e-4,
         }
     )
 
