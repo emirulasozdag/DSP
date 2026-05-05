@@ -3394,6 +3394,7 @@ def api_aging():
     noise = _clamp(noise, 0.0, 1.0)
     detail = _clamp(detail, 0.0, 1.0)
     years = max(-50, min(50, years))
+    save_debug = request.form.get("debug", "false").strip().lower() in {"1", "true", "yes"}
 
     print("=" * 60, flush=True)
     print("AGING ENDPOINT CALLED", flush=True)

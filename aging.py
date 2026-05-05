@@ -656,7 +656,97 @@ def whiten_hair_approximation(image: np.ndarray,
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# 4.  apply_aging_effect  — main entry point
+# 4.  apply_face_sagging  — geometric downward-warp for lower-face sagging
+# ─────────────────────────────────────────────────────────────────────────────
+
+def apply_face_sagging(image: np.ndarray,
+                       landmarks=None,
+                       intensity: float = 0.5) -> np.ndarray:
+    """
+    Simulate gravitational facial sagging with a smooth downward displacement
+    warp applied to the lower-face zone (jowls, cheeks, jawline).
+
+    Implementation
+    ──────────────
+    A per-row vertical displacement dy[y] is computed using a bell-curve
+    (Gaussian-smoothed tent function) centred in the lower-face zone.  The
+    displacement field is then gated by the soft face-ellipse mask so that
+    background pixels and the top of the image are unaffected.
+
+    cv2.remap inverse map:   dst(x, y) = src(map_x(x,y), map_y(x,y))
+    To make pixels appear to sag DOWN we sample ABOVE in the source:
+        map_y(x, y) = y - dy[y] * face_ellipse(x, y)
+
+    Parameters
+    ----------
+    image      : BGR uint8 input (H × W × 3).
+    landmarks  : Optional list of dicts {"x": float, "y": float} (pixel
+                 coordinates) for MediaPipe 468-point FaceMesh.
+    intensity  : Sagging strength in [0, 1].  Recommended 0.2–0.7.
+
+    Returns
+    -------
+    BGR uint8 image, same shape as input.
+    """
+    intensity = float(np.clip(intensity, 0.0, 1.0))
+    if intensity < 0.01:
+        return image.copy()
+
+    h, w = image.shape[:2]
+
+    # ── Determine lower-face zone from landmarks or spatial priors ────────────
+    if landmarks is not None and len(landmarks) >= 468:
+        nose_tip = _lm(landmarks, 1)
+        chin     = _lm(landmarks, 152)
+        if nose_tip is not None and chin is not None:
+            sag_y_top = float(nose_tip[1]) / h
+            sag_y_bot = min(1.0, float(chin[1]) / h + 0.04)
+        else:
+            sag_y_top, sag_y_bot = 0.52, 0.84
+    else:
+        sag_y_top, sag_y_bot = 0.52, 0.84
+
+    # ── Per-row displacement magnitude (pixels) ───────────────────────────────
+    # Peak displacement = 3% of image height at intensity = 1.
+    max_sag_px = h * 0.03 * intensity
+
+    yy         = np.arange(h, dtype=np.float32) / h   # normalised row positions
+    zone_mid   = (sag_y_top + sag_y_bot) * 0.5
+    zone_hw    = max((sag_y_bot - sag_y_top) * 0.5, 1e-6)
+    tent       = np.clip(1.0 - np.abs(yy - zone_mid) / zone_hw, 0.0, 1.0)
+
+    # Smooth the tent to avoid sharp edges in the warp.
+    k_sg  = _odd(max(15, int(h * 0.10)))
+    tent  = cv2.GaussianBlur(
+        tent[:, np.newaxis], (1, k_sg), k_sg * 0.40
+    ).reshape(-1)
+    dy    = (tent * max_sag_px).astype(np.float32)     # (H,)
+
+    # ── Build remap arrays ────────────────────────────────────────────────────
+    face_ell = _face_ellipse_mask(h, w)                # (H, W) float32 [0,1]
+
+    yy_grid  = np.tile(
+        np.arange(h, dtype=np.float32)[:, np.newaxis], (1, w)
+    )                                                   # (H, W)
+    xx_grid  = np.tile(
+        np.arange(w, dtype=np.float32)[np.newaxis, :], (h, 1)
+    )                                                   # (H, W)
+
+    map_x = xx_grid                                    # no horizontal shift
+    map_y = yy_grid - dy[:, np.newaxis] * face_ell    # sample above → sag down
+
+    map_x = np.clip(map_x, 0.0, w - 1.0)
+    map_y = np.clip(map_y, 0.0, h - 1.0)
+
+    return cv2.remap(
+        image, map_x, map_y,
+        interpolation=cv2.INTER_LINEAR,
+        borderMode=cv2.BORDER_REPLICATE,
+    )
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 5.  apply_aging_effect  — main entry point
 # ─────────────────────────────────────────────────────────────────────────────
 
 def apply_aging_effect(image: np.ndarray,

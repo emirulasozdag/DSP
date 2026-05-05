@@ -1870,10 +1870,7 @@ if ($('#btnSimulate')) $('#btnSimulate').addEventListener('click', async functio
     fd.append('hpf', $('#selHPF')?.value || 'gaussian_hpf');
     fd.append('lpf', $('#selLPF')?.value || 'gaussian_lpf');
 
-    const agingEndpoint = (selectedMethod === 'ai') ? '/api/aging-ai' : '/api/aging';
-    console.log('Selected aging method:', selectedMethod);
-    console.log('Aging endpoint:', agingEndpoint);
-    const res = await fetch(agingEndpoint, { method: 'POST', body: fd });
+    const res = await fetch('/api/aging', { method: 'POST', body: fd });
     const data = await res.json();
     if (!res.ok || !data.ok || !data.image) {
       throw new Error(data.error || 'Aging simulation failed.');
