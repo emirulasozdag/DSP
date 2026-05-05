@@ -1121,6 +1121,7 @@ const sliders = [
   { id: 'sLip', valId: 'vLip' },
   { id: 'sSlim', valId: 'vSlim' },
   { id: 'sFaceFullness', valId: 'vFaceFullness' },
+  { id: 'sEyeSize', valId: 'vEyeSize' },
 ];
 sliders.forEach(({ id, valId }) => {
   const s = $(`#${id}`), v = $(`#${valId}`);
@@ -1285,7 +1286,8 @@ function startLiveMode() {
     const slim = Number($('#sSlim')?.value || 0);
     const doubleChin = 0;  // merged into Facial Volume (backend handles coupling)
     const faceFullness = Number($('#sFaceFullness')?.value || 0);
-    if (smile === 0 && brow === 0 && lip === 0 && slim === 0 && faceFullness === 0) return;
+    const eyeSize = Number($('#sEyeSize')?.value || 0);
+    if (smile === 0 && brow === 0 && lip === 0 && slim === 0 && faceFullness === 0 && eyeSize === 0) return;
     _liveProcessing = true;
     try {
       webcamCanvas.width = webcamVideo.videoWidth || 640;
@@ -1300,6 +1302,7 @@ function startLiveMode() {
       fd.append('lip', String(lip));
       fd.append('slim', String(slim));
       fd.append('face_fullness', String(faceFullness));
+      fd.append('eye_size', String(eyeSize));
       fd.append('mode', 'delaunay');
       const res = await fetch('/api/transform', { method: 'POST', body: fd });
       const data = await res.json();
@@ -1825,6 +1828,7 @@ if ($('#btnApplyExpr')) $('#btnApplyExpr').addEventListener('click', async funct
     fd.append('lip', String(Number($('#sLip')?.value || 0)));
     fd.append('slim', String(Number($('#sSlim')?.value || 0)));
     fd.append('face_fullness', String(Number($('#sFaceFullness')?.value || 0)));
+    fd.append('eye_size', String(Number($('#sEyeSize')?.value || 0)));
     fd.append('show_grid', ($('#toggleMesh')?.checked) ? '1' : '0');
     fd.append('mode', $('#sWarpMethod')?.value || 'delaunay');
     fd.append('interpolation', 'bicubic');

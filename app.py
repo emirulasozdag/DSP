@@ -2338,6 +2338,173 @@ def _draw_grid(img: np.ndarray, cols: int = 20, rows: int = 20, alpha: float = 0
     return cv2.addWeighted(overlay, alpha, img, 1.0 - alpha, 0)
 
 
+# ──────────────────────────────────────────────────────────────────────────────
+# Big Eyes — radial iris expansion via dense inverse remap
+# ──────────────────────────────────────────────────────────────────────────────
+def _apply_eye_size_flow(
+    image: np.ndarray,
+    src_pts: np.ndarray,
+    groups: dict,
+    eye_size: float,
+) -> np.ndarray:
+    """Expand each eye region radially around its iris centre.
+
+    Algorithm
+    ---------
+    1. Locate iris centres from MP-468 iris landmarks (468 = right iris centre,
+       473 = left iris centre).  Fall back to eye-group centroids when those
+       super-468 points are absent.
+    2. For each eye build a LOCAL envelope: only pixels inside a soft disc
+       (radius ≈ 1.6 × iris radius) receive displacement.  Beyond that disc
+       the envelope decays to zero → surrounding skin is completely unaffected.
+    3. Radial outward push: each pixel inside the disc is moved toward the
+       iris centre (inverse remap).
+    4. Hard-mask protections before blur:
+         a. Eyebrow lock  — inverse-Gaussian suppression above the eyelid line
+            so brows never drift upward.
+         b. Nose-anchor lock — same mask used in _apply_face_fullness_flow to
+            keep the nose bridge/tip fixed.
+    5. GaussianBlur on the flow field feathers the disc boundary.
+    """
+    if abs(eye_size) < 1e-4:
+        return image
+
+    h, w   = image.shape[:2]
+    n_pts  = len(src_pts)
+    face_w = max(float(np.max(src_pts[:, 0]) - np.min(src_pts[:, 0])), 1.0)
+    face_h = max(float(np.max(src_pts[:, 1]) - np.min(src_pts[:, 1])), 1.0)
+
+    # Non-linear: more perceptible at low values
+    dc = float(eye_size) ** 0.70
+
+    xx, yy = np.meshgrid(
+        np.arange(w, dtype=np.float32),
+        np.arange(h, dtype=np.float32),
+    )
+
+    def _g2d(px, py, rx, ry):
+        return np.exp(
+            -((xx - px) / (rx + 1e-4)) ** 2
+            -((yy - py) / (ry + 1e-4)) ** 2
+        ).astype(np.float32)
+
+    def _safe_pts(indices, fallback_key):
+        result = [src_pts[i] for i in indices if i < n_pts]
+        if not result:
+            idxs = [i for i in groups.get(fallback_key, []) if i < n_pts]
+            if idxs:
+                result = [src_pts[idxs].mean(axis=0)]
+        return result
+
+    # ── Iris centres ──────────────────────────────────────────────────────
+    # MP-468: indices 468..477 are 5 right-iris + 5 left-iris keypoints
+    #   468 = right iris centre, 473 = left iris centre
+    # Eyelid ring landmarks for pupil-radius estimation:
+    #   Right eye lid: [33, 133, 160, 159, 158, 144, 145, 153]
+    #   Left  eye lid: [362, 263, 387, 386, 385, 373, 374, 380]
+    right_iris_idxs = [468, 469, 470, 471, 472]
+    left_iris_idxs  = [473, 474, 475, 476, 477]
+
+    right_iris_pts = _safe_pts(right_iris_idxs, "lower_eye_right")
+    left_iris_pts  = _safe_pts(left_iris_idxs,  "lower_eye_left")
+
+    if not right_iris_pts and not left_iris_pts:
+        return image
+
+    # Eyelid bounds used to estimate iris radius (half of vertical lid aperture)
+    right_lid_pts = _safe_pts([159, 145], "lower_eye_right")   # top + bottom
+    left_lid_pts  = _safe_pts([386, 374], "lower_eye_left")
+
+    def _iris_radius(lid_pts, face_h):
+        if len(lid_pts) >= 2:
+            return max(abs(float(lid_pts[0][1]) - float(lid_pts[1][1])) * 1.5, face_h * 0.025)
+        return face_h * 0.040   # conservative fallback
+
+    r_right = _iris_radius(right_lid_pts, face_h)
+    r_left  = _iris_radius(left_lid_pts,  face_h)
+
+    # ── Build per-eye envelopes and flow fields ───────────────────────────
+    flow_x = np.zeros((h, w), dtype=np.float32)
+    flow_y = np.zeros((h, w), dtype=np.float32)
+
+    def _add_eye_flow(iris_pts, iris_radius):
+        cx = float(np.mean([p[0] for p in iris_pts]))
+        cy = float(np.mean([p[1] for p in iris_pts]))
+
+        # Soft disc: Gaussian with σ = 0.8 × iris_radius → falls near zero at ~2r
+        env = _g2d(cx, cy, iris_radius * 1.35, iris_radius * 1.35)
+        env = np.clip(env, 0.0, 1.0)
+
+        # Radial unit vectors pointing AWAY from iris centre
+        dx_raw = xx - cx
+        dy_raw = yy - cy
+        dist   = np.sqrt(dx_raw ** 2 + dy_raw ** 2).astype(np.float32) + 1e-4
+        ux = (dx_raw / dist).astype(np.float32)
+        uy = (dy_raw / dist).astype(np.float32)
+
+        # Push magnitude: dc × iris_radius × 0.65 at envelope peak
+        push = dc * iris_radius * 0.65
+        # Inverse remap: move source pixel inward so the eye appears larger
+        return -env * ux * push, -env * uy * push
+
+    if right_iris_pts:
+        fx, fy = _add_eye_flow(right_iris_pts, r_right)
+        flow_x += fx;  flow_y += fy
+    if left_iris_pts:
+        fx, fy = _add_eye_flow(left_iris_pts, r_left)
+        flow_x += fx;  flow_y += fy
+
+    # ── Protection 1: brow lock ───────────────────────────────────────────
+    # Suppress any upward (negative y) flow above the upper-eyelid line so
+    # brows are never lifted by the eye-size warp.
+    brow_pts = _safe_pts(
+        groups.get("brow_left",  []) + groups.get("brow_right", []),
+        "brow_left"
+    )
+    eyelid_top_pts = _safe_pts([159, 386], "upper_eyelid_left")
+    if eyelid_top_pts:
+        upper_eyelid_y = float(np.mean([p[1] for p in eyelid_top_pts]))
+    elif brow_pts:
+        upper_eyelid_y = float(np.mean([p[1] for p in brow_pts])) + face_h * 0.04
+    else:
+        upper_eyelid_y = float(np.min(src_pts[:, 1])) + face_h * 0.25
+
+    # Soft gate: sigmoid that goes 0 → 1 as y increases past the eyelid top
+    band_brow = face_h * 0.03
+    sig_brow  = 1.0 / (1.0 + np.exp(-np.clip((yy - upper_eyelid_y) / (band_brow + 1e-4), -7, 7)))
+    sig_brow  = sig_brow.astype(np.float32)
+    # Only suppress upward flow (flow_y < 0 means pixel sampled from above = brow lift)
+    flow_y = np.where(flow_y < 0, flow_y * sig_brow, flow_y)
+
+    # ── Protection 2: nose-anchor lock ────────────────────────────────────
+    _NOSE_ANCHORS = [1, 2, 4, 5, 168]
+    nose_pts = _safe_pts(_NOSE_ANCHORS, "nose_tip")
+    if nose_pts:
+        nose_env = np.zeros((h, w), dtype=np.float32)
+        for p in nose_pts:
+            nose_env = np.maximum(
+                nose_env,
+                _g2d(float(p[0]), float(p[1]), face_w * 0.13, face_h * 0.10),
+            )
+        nose_free = (1.0 - np.clip(nose_env, 0.0, 1.0)).astype(np.float32)
+        flow_x *= nose_free
+        flow_y *= nose_free
+
+    # ── Gaussian blur for smooth falloff at disc edge ─────────────────────
+    ksize      = max(int(face_h * 0.09) | 1, 7)
+    sigma_blur = ksize * 0.45
+    flow_x = cv2.GaussianBlur(flow_x, (ksize, ksize), sigma_blur)
+    flow_y = cv2.GaussianBlur(flow_y, (ksize, ksize), sigma_blur)
+
+    return cv2.remap(
+        image,
+        xx + flow_x,
+        yy + flow_y,
+        interpolation=cv2.INTER_CUBIC,
+        borderMode=cv2.BORDER_REFLECT_101,
+    )
+
+
 def _apply_double_chin_flow(
     image: np.ndarray,
     src_pts: np.ndarray,
@@ -3242,6 +3409,7 @@ def _apply_expression_warp(
     interp: int = cv2.INTER_CUBIC,
     double_chin: float = 0.0,
     face_fullness: float = 0.0,
+    eye_size: float = 0.0,
 ) -> tuple:
     """
     Anatomical Delaunay expression warp using MediaPipe 468-point mesh.
@@ -3263,7 +3431,7 @@ def _apply_expression_warp(
     Returns (result, debug_paths, used_lm_count, moved_pts, max_disp, tri_count).
     """
     h, w = image.shape[:2]
-    if abs(smile) < 1e-4 and abs(brow) < 1e-4 and abs(lip) < 1e-4 and abs(slim) < 1e-4 and abs(double_chin) < 1e-4 and abs(face_fullness) < 1e-4:
+    if abs(smile) < 1e-4 and abs(brow) < 1e-4 and abs(lip) < 1e-4 and abs(slim) < 1e-4 and abs(double_chin) < 1e-4 and abs(face_fullness) < 1e-4 and abs(eye_size) < 1e-4:
         return image.copy(), {}, 0, 0, 0.0, 0, "none"
 
     # 1. Anatomical landmark extraction: full 468-pt MediaPipe mesh with group defs
@@ -3304,7 +3472,7 @@ def _apply_expression_warp(
     #    exposed background gap and produce the blue-stripe artefact on the cheeks.
     debug_paths: dict = {}
     has_mesh_expression = (
-        abs(smile) >= 1e-4 or abs(brow) >= 1e-4 or abs(lip) >= 1e-4 or abs(double_chin) >= 1e-4 or abs(face_fullness) >= 1e-4
+        abs(smile) >= 1e-4 or abs(brow) >= 1e-4 or abs(lip) >= 1e-4 or abs(double_chin) >= 1e-4 or abs(face_fullness) >= 1e-4 or abs(eye_size) >= 1e-4
     )
 
     if has_mesh_expression:
@@ -3388,6 +3556,10 @@ def _apply_expression_warp(
     #     the face centroid, locked above the nose line.
     if abs(face_fullness) >= 1e-4:
         result = _apply_face_fullness_flow(result, src_pts, groups, face_fullness)
+
+    # 11. Apply Big Eyes — iris-centred radial expansion with brow + nose lock.
+    if abs(eye_size) >= 1e-4:
+        result = _apply_eye_size_flow(result, src_pts, groups, eye_size)
 
     if save_debug:
         moved_set = set(moved_indices)
@@ -4145,6 +4317,7 @@ def api_transform():
         lip         = float(request.form.get("lip",          0))
         slim        = float(request.form.get("slim",         0))
         face_fullness = float(request.form.get("face_fullness", 0))
+        eye_size    = float(request.form.get("eye_size",     0))
     except ValueError:
         return _error("Invalid slider values.", 400)
 
@@ -4159,6 +4332,7 @@ def api_transform():
     lip           = _norm(lip)
     slim          = _norm(slim)
     face_fullness = _norm(face_fullness)
+    eye_size      = _norm(eye_size)
 
     warp_mode = (request.form.get("mode", "delaunay") or "delaunay").strip().lower()
     if warp_mode not in {"delaunay", "tps", "flow"}:
@@ -4176,7 +4350,7 @@ def api_transform():
     show_grid = request.form.get("show_grid", "0").strip() in {"1", "true", "yes"}
 
     # ── Fast path: all sliders at zero → return original immediately ──────
-    if smile == 0.0 and brow == 0.0 and lip == 0.0 and slim == 0.0 and face_fullness == 0.0:
+    if smile == 0.0 and brow == 0.0 and lip == 0.0 and slim == 0.0 and face_fullness == 0.0 and eye_size == 0.0:
         h_orig, w_orig = image.shape[:2]
         try:
             encoded_orig = _encode_base64_jpeg(image)
@@ -4214,6 +4388,7 @@ def api_transform():
         interp=interp_flag,
         double_chin=face_fullness * 0.30,   # secondary chin coupling: 30 % of volume
         face_fullness=face_fullness,
+        eye_size=eye_size,
     )
 
     h, w = result.shape[:2]
