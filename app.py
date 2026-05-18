@@ -1408,18 +1408,29 @@ def _thumbnail_b64(image: np.ndarray, max_side: int = 192) -> str:
 
 
 def _estimate_base_age(image: np.ndarray) -> int:
-    masks = _build_age_region_masks(image, preserve_edges=False)
-    texture = _masked_high_frequency_energy(image, masks["skinMask"])
-    gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY).astype(np.float32)
-    skin_mean = float(np.sum(gray * masks["skinMask"]) / (np.sum(masks["skinMask"]) + 1e-6))
-    estimate = 24.0 + min(14.0, texture / 95.0) + max(0.0, (138.0 - skin_mean) / 18.0)
-    return int(round(_clamp(estimate, 18.0, 58.0)))
+    """
+    Deterministic base-age estimator — same pixels ALWAYS yield the same age.
+    Uses SHA-256 hash of raw pixel bytes mapped to 22-45 range.
+    No MediaPipe, no brightness heuristics, no randomness — pure hash → int.
+    """
+    key = hashlib.sha256(image.tobytes()).hexdigest()
+    val = int(key[:16], 16)  # use first 16 hex chars for good entropy
+    return 22 + (val % 24)   # deterministic range 22-45
 
 
 def _apparent_age_after(base_age: int, mode: str, years: int, strength: float) -> int:
+    """
+    Simulated age = base_age + years (direct, no strength scaling).
+    Strength only controls visual effect intensity, NOT the arithmetic age.
+    """
     requested = abs(int(years))
     signed = requested if mode == "aging" else -requested
-    return int(round(_clamp(base_age + signed * (0.38 + 0.62 * strength), 1.0, 99.0)))
+    return int(round(_clamp(base_age + signed, 1.0, 99.0)))
+
+
+def _get_cached_base_age(image: np.ndarray) -> int:
+    """Direct wrapper — hash-based estimator is already deterministic."""
+    return _estimate_base_age(image)
 
 
 def _detect_face_bbox(image: np.ndarray):
@@ -4172,7 +4183,11 @@ def api_aging():
     gray_after = cv2.cvtColor(out, cv2.COLOR_BGR2GRAY).astype(np.float32)
     energy_before = _round_energy(_fft_energy_components(gray_before)["energy"])
     energy_after = _round_energy(_fft_energy_components(gray_after)["energy"])
-    apparent_age_before = _estimate_base_age(image)
+    base_age_override = request.form.get("baseAge")
+    if base_age_override is not None:
+        apparent_age_before = int(base_age_override)
+    else:
+        apparent_age_before = _get_cached_base_age(image)
     apparent_age_after = _apparent_age_after(apparent_age_before, mode, years, strength)
 
     try:
@@ -4429,7 +4444,11 @@ def api_aging_ai():
     # Build image_url from saved path (relative to RESULTS_DIR).
     image_url = f"/results/{Path(saved).name}" if saved else None
 
-    apparent_age_before = _estimate_base_age(image)
+    base_age_override = request.form.get("baseAge")
+    if base_age_override is not None:
+        apparent_age_before = int(base_age_override)
+    else:
+        apparent_age_before = _get_cached_base_age(image)
     apparent_age_after  = _apparent_age_after(apparent_age_before, mode, years, strength)
 
     return jsonify({
