@@ -2210,77 +2210,7 @@ function stopAccessoryFilter() {
   }
 }
 
-/* ═══════════════════ WEBCAM LIVE MODE ═══════════════════ */
-let _liveTimer = null;
-let _liveProcessing = false;
-
-function startLiveMode() {
-  if (_liveTimer) return;
-  const liveOutputWrap = $('#liveOutputWrap');
-  const liveOutput = $('#liveOutput');
-  if (liveOutputWrap) liveOutputWrap.style.display = 'block';
-  const btnLive = $('#btnLiveMode');
-  if (btnLive) btnLive.textContent = '⏹ Stop Live';
-
-  _liveTimer = setInterval(async () => {
-    if (_liveProcessing || !webcamVideo || !webcamCanvas || !webcamStream) return;
-    const smile = Number($('#sSmile')?.value || 0);
-    const brow = Number($('#sBrow')?.value || 0);
-    const lip = Number($('#sLip')?.value || 0);
-    const slim = Number($('#sSlim')?.value || 0);
-    const doubleChin = 0;  // merged into Facial Volume (backend handles coupling)
-    const faceFullness = Number($('#sFaceFullness')?.value || 0);
-    const eyeSize = Number($('#sEyeSize')?.value || 0);
-    const lipTint = Number($('#sLipTint')?.value || 0);
-    const blush = Number($('#sBlush')?.value || 0);
-    if (smile === 0 && brow === 0 && lip === 0 && slim === 0 && faceFullness === 0 && eyeSize === 0 && lipTint === 0 && blush === 0) return;
-    _liveProcessing = true;
-    try {
-      webcamCanvas.width = webcamVideo.videoWidth || 640;
-      webcamCanvas.height = webcamVideo.videoHeight || 480;
-      webcamCanvas.getContext('2d').drawImage(webcamVideo, 0, 0);
-      const frameBlob = dataUrlToBlob(webcamCanvas.toDataURL('image/jpeg', 0.75));
-      if (!frameBlob) return;
-      const fd = new FormData();
-      fd.append('image', frameBlob, 'live-frame.jpg');
-      fd.append('smile', String(smile));
-      fd.append('brow', String(brow));
-      fd.append('lip', String(lip));
-      fd.append('slim', String(slim));
-      fd.append('face_fullness', String(faceFullness));
-      fd.append('eye_size', String(eyeSize));
-      fd.append('lip_tint', String(lipTint));
-      fd.append('blush', String(blush));
-      fd.append('mode', 'delaunay');
-      const res = await fetch('/api/transform', { method: 'POST', body: fd });
-      const data = await res.json();
-      if (data.ok && data.image && liveOutput) {
-        liveOutput.src = `data:image/jpeg;base64,${data.image}`;
-      }
-    } catch (_) { /* ignore mid-stream errors */ }
-    finally { _liveProcessing = false; }
-  }, 450); // ~2 fps — keeps server load acceptable
-}
-
-function stopLiveMode() {
-  if (_liveTimer) { clearInterval(_liveTimer); _liveTimer = null; }
-  const liveOutputWrap = $('#liveOutputWrap');
-  if (liveOutputWrap) liveOutputWrap.style.display = 'none';
-  const btnLive = $('#btnLiveMode');
-  if (btnLive) btnLive.textContent = '⏵ Live Mode';
-  _liveProcessing = false;
-}
-
-if ($('#btnLiveMode')) {
-  $('#btnLiveMode').addEventListener('click', () => {
-    if (_liveTimer) {
-      stopLiveMode();
-    } else {
-      if (!webcamStream) { toast('Start webcam first.', 'warning'); return; }
-      startLiveMode();
-    }
-  });
-}
+/* ═══════════════════ WEBCAM ═══════════════════ */
 
 function startWebcam() {
   if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
@@ -2313,7 +2243,6 @@ function startWebcam() {
     });
 }
 function stopWebcam() {
-  stopLiveMode();
   stopAccessoryFilter();
   if (webcamStream) { webcamStream.getTracks().forEach(t => t.stop()); webcamStream = null; }
   document.body.classList.remove('tryon-open');
