@@ -15,6 +15,12 @@ from mediapipe.tasks.python import vision
 # Append sam_repo to sys.path so we can import its modules
 PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 SAM_REPO_PATH = os.path.join(PROJECT_ROOT, "sam_repo")
+
+if not os.path.exists(SAM_REPO_PATH):
+    print("[AgingService] SAM (Spatially-Aware-Modification) repository not found. Downloading automatically...")
+    import subprocess
+    subprocess.run(["git", "clone", "https://github.com/yuval-alaluf/SAM.git", SAM_REPO_PATH], check=True)
+
 if SAM_REPO_PATH not in sys.path:
     sys.path.append(SAM_REPO_PATH)
 
@@ -120,7 +126,17 @@ class LocalAgingService:
         print(f"[AgingService] Initializing local model from {model_path} on {self.device}...")
         
         if not os.path.exists(model_path):
-            raise FileNotFoundError(f"Model file not found at {model_path}")
+            print(f"[AgingService] Model file not found at {model_path}. Downloading...")
+            os.makedirs(os.path.dirname(model_path), exist_ok=True)
+            import gdown
+            # NOT: model_path için gdown linki. Aşağıdaki id'yi kendi Google Drive dosya ID'niz ile değiştirin!
+            # Örnek: drive linkinizdeki d/ ile /view arasındaki karmaşık yazı id'dir.
+            file_id = '1QTK-O0xoUZavCUCno-YKxIhsbXSGY5ia'
+            url = f'https://drive.google.com/uc?id={file_id}'
+            gdown.download(url, model_path, quiet=False)
+            
+            if not os.path.exists(model_path):
+                raise FileNotFoundError(f"Model dosyasi indirilemedi! Lutfen {model_path} dosyasini manuel olarak ekleyin.")
 
         if not SAM_AVAILABLE:
             raise RuntimeError("SAM repository modules are missing. Cannot load SAM architecture.")
