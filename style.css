@@ -2099,8 +2099,8 @@ body.tryon-open {
   transform: scaleX(1);
 }
 
-.webcam-body.is-mirrored #webcamVideo,
-.webcam-body.is-mirrored #accessoryCanvas {
+.webcam-body.mirror-corrected #webcamVideo,
+.webcam-body.mirror-corrected #accessoryCanvas {
   transform: scaleX(-1);
 }
 

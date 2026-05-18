@@ -9,7 +9,7 @@ The virtual try-on is integrated into the existing FaceWarp website webcam flow.
 - Live webcam input inside the FaceWarp website.
 - MediaPipe Face Mesh landmark tracking for live browser frames.
 - Right-side category menu with Accessories and Makeup.
-- Glasses, hats, earrings, necklace, lipstick, and blush filters.
+- Six premium glasses styles, five cartoon hat models, earrings, necklace, lipstick, and blush filters.
 - Yaw-aware glasses placement for left/right head turns.
 - Perspective-like glasses warping for a more 3-D try-on feel.
 - Hat placement anchored to upper-face landmarks and shifted upward so it sits near the hairline.
@@ -26,10 +26,15 @@ assets/
   glasses_1.png
   glasses_2.png
   glasses_3.png
+  glasses_4.png
+  glasses_5.png
+  glasses_6.png
   hat.png
   hat_1.png
   hat_2.png
   hat_3.png
+  hat_5.png
+  hat_6.png
   earring_1.png
   earring_2.png
   earring_3.png
@@ -64,8 +69,9 @@ Website try-on menu:
 - `B`: go back
 - `0`: clear filters
 - `D`: toggle makeup anchor debug points
-- `R`: toggle optional mirror mode; default is Mirror Off
+- `R`: toggle optional mirror mode; default is Mirror Off. On browsers that deliver the camera mirrored, Mirror Off counter-flips the display so the preview looks non-mirrored.
 - `Q` or `ESC`: close webcam
+- The panel also shows render FPS, landmark latency, smoothing alpha, and whether landmarks are fresh or stale.
 
 For a fresh environment:
 
@@ -133,7 +139,9 @@ This behaves like a low-pass filter: it suppresses fast landmark jitter while ke
 
 Useful constants:
 
-- `SMOOTHING_ALPHA` / `accessoryState.alpha`: higher reacts faster, lower is steadier.
+- `FAST_SMOOTHING_ALPHA`: faster tracking for lips, eyes, glasses, cheeks, roll, and yaw.
+- `SLOW_SMOOTHING_ALPHA`: steadier tracking for hat/necklace anchors.
+- `LANDMARK_POLL_MS`: interval for live Face Mesh landmark requests.
 - `GLASSES_WIDTH_FACTOR_WEB`: glasses size relative to eye distance.
 - `HAT_WIDTH_FACTOR_WEB`: hat size relative to face width.
 - `HAT_Y_OFFSET_FACTOR_WEB`: negative values move the hat upward.
@@ -158,7 +166,7 @@ Confirm that:
 - the category menu shows Accessories and Makeup
 - clicking catalog cards changes accessories and makeup
 - `A`, `M`, `B`, `0`, `D`, `Q`, and `ESC` work
-- Mirror mode is Off by default; pressing `R` flips the video and accessory canvas together
+- Mirror mode is Off by default; the video and accessory canvas are flipped together only when needed to counter-correct a mirrored camera stream
 - glasses stay aligned when moving left/right, tilting, and moving closer/farther
 - the hat sits on top of the head instead of covering the forehead
 - lipstick sits on the lips and blush sits on both cheeks

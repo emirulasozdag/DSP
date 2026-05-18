@@ -335,15 +335,30 @@ def load_catalog() -> tuple[list[Accessory], list[Accessory]]:
     """Load all catalog accessories once so the webcam loop stays fast."""
     glasses = []
     hats = []
-    for idx in range(1, 4):
-        path = ASSETS_DIR / f"glasses_{idx}.png"
+    glasses_assets = [
+        ("Leopard Cat Eye", "glasses_1.png"),
+        ("Steampunk", "glasses_2.png"),
+        ("Cat Eye", "glasses_3.png"),
+        ("Oval", "glasses_4.png"),
+        ("Square", "glasses_5.png"),
+        ("Shield", "glasses_6.png"),
+    ]
+    for name, filename in glasses_assets:
+        path = ASSETS_DIR / filename
         image = load_png_with_alpha(path)
-        glasses.append(Accessory(f"Glasses {idx}", path, image, make_thumbnail(image)))
+        glasses.append(Accessory(name, path, image, make_thumbnail(image)))
 
-    for idx in range(1, 4):
-        path = ASSETS_DIR / f"hat_{idx}.png"
+    hat_assets = [
+        ("Bucket Hat", "hat_1.png"),
+        ("Cowboy Hat", "hat_2.png"),
+        ("Straw Hat", "hat_3.png"),
+        ("Beret", "hat_5.png"),
+        ("Fedora", "hat_6.png"),
+    ]
+    for name, filename in hat_assets:
+        path = ASSETS_DIR / filename
         image = load_png_with_alpha(path)
-        hats.append(Accessory(f"Hat {idx}", path, image, make_thumbnail(image)))
+        hats.append(Accessory(name, path, image, make_thumbnail(image)))
 
     return glasses, hats
 
@@ -392,22 +407,26 @@ def draw_catalog_panel(
         draw_label(panel, title, (22, y), 0.66, (255, 255, 255), 2)
         y += 16
         for i, item in enumerate(items):
-            x = 22 + i * (CARD_W + CARD_GAP)
+            col = i % 3
+            row = i // 3
+            x = 22 + col * (CARD_W + CARD_GAP)
+            yy = y + row * (CARD_H + 12)
             active = (kind == "glasses" and state.show_glasses and i == selected) or (
                 kind == "hat" and state.show_hat and i == selected
             )
             fill = (29, 35, 54) if not active else (42, 62, 104)
             border = (79, 91, 127) if not active else (80, 190, 255)
-            cv2.rectangle(panel, (x, y), (x + CARD_W, y + CARD_H), fill, -1)
-            cv2.rectangle(panel, (x, y), (x + CARD_W, y + CARD_H), border, 2)
+            cv2.rectangle(panel, (x, yy), (x + CARD_W, yy + CARD_H), fill, -1)
+            cv2.rectangle(panel, (x, yy), (x + CARD_W, yy + CARD_H), border, 2)
             thumb = item.thumb
             tx = x + (CARD_W - thumb.shape[1]) // 2
-            ty = y + 8
+            ty = yy + 8
             panel[ty:ty + thumb.shape[0], tx:tx + thumb.shape[1]] = thumb
             key = str(i + 1 if kind == "glasses" else i + 4)
-            draw_label(panel, f"{key}", (x + 8, y + CARD_H - 10), 0.50, (194, 205, 255), 1)
-            rects.append((x, y, CARD_W, CARD_H, kind, i))
-        return y + CARD_H + 42
+            draw_label(panel, f"{key}", (x + 8, yy + CARD_H - 10), 0.50, (194, 205, 255), 1)
+            rects.append((x, yy, CARD_W, CARD_H, kind, i))
+        rows = max(1, math.ceil(len(items) / 3))
+        return y + rows * (CARD_H + 12) + 30
 
     y_next = draw_section("Glasses", glasses, "glasses", state.glasses_index, 204)
     draw_section("Hats", hats, "hat", state.hat_index, y_next)
@@ -416,7 +435,7 @@ def draw_catalog_panel(
     cv2.line(panel, (22, controls_y - 22), (CATALOG_WIDTH - 22, controls_y - 22), (47, 56, 82), 1)
     draw_label(panel, "Controls", (22, controls_y), 0.64, (255, 255, 255), 2)
     controls = [
-        "1-3 Glasses   4-6 Hats",
+        "1-6 Glasses   7-9 Hats",
         "G/H Toggle    R Mirror",
         "0 Clear       Click cards",
         "Q/ESC Quit",
@@ -482,11 +501,11 @@ def handle_key(key: int, state: TryOnState) -> bool:
     """Return True when the app should quit."""
     if key in (27, ord("q"), ord("Q")):
         return True
-    if key in (ord("1"), ord("2"), ord("3")):
+    if key in (ord("1"), ord("2"), ord("3"), ord("4"), ord("5"), ord("6")):
         state.glasses_index = key - ord("1")
         state.show_glasses = True
-    elif key in (ord("4"), ord("5"), ord("6")):
-        state.hat_index = key - ord("4")
+    elif key in (ord("7"), ord("8"), ord("9")):
+        state.hat_index = key - ord("7")
         state.show_hat = True
     elif key in (ord("g"), ord("G")):
         state.show_glasses = not state.show_glasses

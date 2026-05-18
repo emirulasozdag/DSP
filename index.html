@@ -5,7 +5,7 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width,initial-scale=1.0" />
   <title>FaceWarp DSP</title>
-  <link rel="stylesheet" href="style.css" />
+  <link rel="stylesheet" href="style.css?v=tryon-glasses-1" />
   <link
     href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600;700&display=swap"
     rel="stylesheet" />
@@ -255,6 +255,10 @@
                   <div><span>Blush</span><strong id="selectedBlushName">Off</strong></div>
                   <div><span>Mirror</span><strong id="mirrorStatus">Off</strong></div>
                   <div><span>Debug</span><strong id="makeupDebugStatus">Debug anchors off</strong></div>
+                  <div><span>FPS</span><strong id="trackingFps">--</strong></div>
+                  <div><span>Latency</span><strong id="trackingLatency">-- ms</strong></div>
+                  <div><span>Alpha</span><strong id="trackingAlpha">0.65 / 0.35</strong></div>
+                  <div><span>Landmarks</span><strong id="trackingFreshness">Waiting</strong></div>
                 </div>
 
                 <div class="catalog-actions">
@@ -2701,7 +2705,7 @@
   </main>
 
   <div id="toastContainer"></div>
-  <script src="app.js"></script>
+  <script src="app.js?v=tryon-glasses-1"></script>
 </body>
 
 </html>

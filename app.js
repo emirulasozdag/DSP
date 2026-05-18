@@ -1409,33 +1409,46 @@ const catalogBackBtn = $('#catalogBackBtn');
 const catalogClearBtn = $('#catalogClearBtn');
 const mirrorToggleBtn = $('#mirrorToggleBtn');
 const mirrorStatus = $('#mirrorStatus');
+const trackingFpsEl = $('#trackingFps');
+const trackingLatencyEl = $('#trackingLatency');
+const trackingAlphaEl = $('#trackingAlpha');
+const trackingFreshnessEl = $('#trackingFreshness');
 
 const GLASSES_WIDTH_FACTOR_WEB = 2.45;
 const HAT_WIDTH_FACTOR_WEB = 1.55;
 const HAT_Y_OFFSET_FACTOR_WEB = -0.45;
 const HAT_BOTTOM_ALIGNMENT_WEB = 0.55;
+const FAST_SMOOTHING_ALPHA = 0.65;
+const SLOW_SMOOTHING_ALPHA = 0.35;
+const LANDMARK_POLL_MS = 105;
+const LANDMARK_STALE_MS = 260;
 const LIPSTICK_OUTER_LANDMARKS = [61, 146, 91, 181, 84, 17, 314, 405, 321, 375, 291, 308];
 const LIPSTICK_INNER_LANDMARKS = [78, 95, 88, 178, 87, 14, 317, 402, 318, 324];
 const BLUSH_LEFT_LANDMARKS = [50, 117, 118, 119, 123, 187];
 const BLUSH_RIGHT_LANDMARKS = [280, 346, 347, 348, 352, 411];
-const LIPSTICK_OPACITY = 0.68;
-const LIPSTICK_BLUR = 2.2;
-const BLUSH_OPACITY = 0.34;
+const LIPSTICK_OPACITY = 0.28;
+const LIPSTICK_BLUR = 3;
+const BLUSH_OPACITY = 0.22;
 const BLUSH_BLUR = 18;
-const BLUSH_X_OFFSET = 0.015;
-const BLUSH_Y_OFFSET = 0.030;
-const BLUSH_SCALE = 1.0;
+const BLUSH_X_OFFSET = 0.045;
+const BLUSH_Y_OFFSET = 0.040;
+const BLUSH_SCALE = 1.45;
 
 const FILTER_CATALOG = {
   glasses: [
-    { name: 'Model 1', src: '/assets/glasses_1.png', image: new Image() },
-    { name: 'Model 2', src: '/assets/glasses_2.png', image: new Image() },
-    { name: 'Model 3', src: '/assets/glasses_3.png', image: new Image() },
+    { name: 'Leopard Cat Eye', src: '/assets/glasses_1.png', image: new Image() },
+    { name: 'Steampunk', src: '/assets/glasses_2.png', image: new Image() },
+    { name: 'Cat Eye', src: '/assets/glasses_3.png', image: new Image() },
+    { name: 'Oval', src: '/assets/glasses_4.png', image: new Image() },
+    { name: 'Square', src: '/assets/glasses_5.png', image: new Image() },
+    { name: 'Shield', src: '/assets/glasses_6.png', image: new Image() },
   ],
   hat: [
-    { name: 'Model 1', src: '/assets/hat_1.png', image: new Image() },
-    { name: 'Model 2', src: '/assets/hat_2.png', image: new Image() },
-    { name: 'Model 3', src: '/assets/hat_3.png', image: new Image() },
+    { name: 'Bucket Hat', src: '/assets/hat_1.png', image: new Image() },
+    { name: 'Cowboy Hat', src: '/assets/hat_2.png', image: new Image() },
+    { name: 'Straw Hat', src: '/assets/hat_3.png', image: new Image() },
+    { name: 'Beret', src: '/assets/hat_5.png', image: new Image() },
+    { name: 'Fedora', src: '/assets/hat_6.png', image: new Image() },
   ],
   earrings: [
     { name: 'Model 1', src: '/assets/earring_1.png', image: new Image() },
@@ -1494,9 +1507,18 @@ const accessoryState = {
   processing: false,
   measurements: null,
   smoothed: null,
-  alpha: 0.32,
+  fastAlpha: FAST_SMOOTHING_ALPHA,
+  slowAlpha: SLOW_SMOOTHING_ALPHA,
   loadedImages: 0,
-  totalImages: 12,
+  totalImages: 17,
+  requestId: 0,
+  appliedRequestId: 0,
+  lastLatencyMs: null,
+  lastLandmarkAt: 0,
+  fps: 0,
+  frameCount: 0,
+  fpsLastAt: performance.now(),
+  lastDebugUiAt: 0,
   menuLevel: 'main',
   category: null,
   subcategory: null,
@@ -1549,9 +1571,28 @@ function updateSelectedFilterLabels() {
   if (debugEl) debugEl.textContent = accessoryState.debugMakeup ? 'Debug anchors on' : 'Debug anchors off';
 }
 
+function updateTrackingDebug(force = false) {
+  const now = performance.now();
+  if (!force && now - accessoryState.lastDebugUiAt < 180) return;
+  accessoryState.lastDebugUiAt = now;
+
+  const age = accessoryState.lastLandmarkAt ? now - accessoryState.lastLandmarkAt : Infinity;
+  const fresh = Number.isFinite(age) && age <= LANDMARK_STALE_MS;
+  if (trackingFpsEl) trackingFpsEl.textContent = accessoryState.fps ? `${accessoryState.fps.toFixed(0)} fps` : '--';
+  if (trackingLatencyEl) trackingLatencyEl.textContent = Number.isFinite(accessoryState.lastLatencyMs) ? `${Math.round(accessoryState.lastLatencyMs)} ms` : '-- ms';
+  if (trackingAlphaEl) trackingAlphaEl.textContent = `${accessoryState.fastAlpha.toFixed(2)} / ${accessoryState.slowAlpha.toFixed(2)}`;
+  if (trackingFreshnessEl) trackingFreshnessEl.textContent = fresh ? 'Fresh' : (accessoryState.lastLandmarkAt ? 'Stale' : 'Waiting');
+}
+
 function setMirrorMode(enabled) {
   accessoryState.mirror = Boolean(enabled);
-  if (webcamBody) webcamBody.classList.toggle('is-mirrored', accessoryState.mirror);
+  // Some browsers/devices deliver the webcam preview already mirrored.
+  // Mirror Off is the default user-facing mode, so we counter-flip the
+  // displayed video and overlay together while keeping landmark math aligned.
+  if (webcamBody) webcamBody.classList.toggle('mirror-corrected', !accessoryState.mirror);
+  const displayTransform = accessoryState.mirror ? 'scaleX(1)' : 'scaleX(-1)';
+  if (webcamVideo) webcamVideo.style.transform = displayTransform;
+  if (accessoryCanvas) accessoryCanvas.style.transform = displayTransform;
   updateSelectedFilterLabels();
 }
 
@@ -1672,12 +1713,12 @@ document.addEventListener('keydown', event => {
   event.preventDefault();
 });
 
-function smoothNumber(previous, current, alpha = accessoryState.alpha) {
+function smoothNumber(previous, current, alpha) {
   if (!Number.isFinite(previous)) return current;
   return ((1 - alpha) * previous) + (alpha * current);
 }
 
-function smoothPoint(previous, current, alpha = accessoryState.alpha) {
+function smoothPoint(previous, current, alpha) {
   if (!previous) return current;
   return {
     x: smoothNumber(previous.x, current.x, alpha),
@@ -1685,32 +1726,34 @@ function smoothPoint(previous, current, alpha = accessoryState.alpha) {
   };
 }
 
-function smoothPointList(previous, current, alpha = accessoryState.alpha) {
+function smoothPointList(previous, current, alpha) {
   if (!Array.isArray(current)) return current;
   return current.map((point, index) => smoothPoint(previous?.[index], point, alpha));
 }
 
 function smoothAccessoryMeasurements(previous, current) {
   if (!previous) return current;
+  const fast = accessoryState.fastAlpha;
+  const slow = accessoryState.slowAlpha;
   return {
-    eyeCenter: smoothPoint(previous.eyeCenter, current.eyeCenter),
-    noseBridge: smoothPoint(previous.noseBridge, current.noseBridge),
-    forehead: smoothPoint(previous.forehead, current.forehead),
-    earringLeft: smoothPoint(previous.earringLeft, current.earringLeft),
-    earringRight: smoothPoint(previous.earringRight, current.earringRight),
-    necklaceAnchor: smoothPoint(previous.necklaceAnchor, current.necklaceAnchor),
-    blushLeft: smoothPoint(previous.blushLeft, current.blushLeft),
-    blushRight: smoothPoint(previous.blushRight, current.blushRight),
-    blushLeftAnchors: smoothPointList(previous.blushLeftAnchors, current.blushLeftAnchors),
-    blushRightAnchors: smoothPointList(previous.blushRightAnchors, current.blushRightAnchors),
-    lipOuter: smoothPointList(previous.lipOuter, current.lipOuter),
-    lipInner: smoothPointList(previous.lipInner, current.lipInner),
+    eyeCenter: smoothPoint(previous.eyeCenter, current.eyeCenter, fast),
+    noseBridge: smoothPoint(previous.noseBridge, current.noseBridge, fast),
+    forehead: smoothPoint(previous.forehead, current.forehead, slow),
+    earringLeft: smoothPoint(previous.earringLeft, current.earringLeft, fast),
+    earringRight: smoothPoint(previous.earringRight, current.earringRight, fast),
+    necklaceAnchor: smoothPoint(previous.necklaceAnchor, current.necklaceAnchor, slow),
+    blushLeft: smoothPoint(previous.blushLeft, current.blushLeft, fast),
+    blushRight: smoothPoint(previous.blushRight, current.blushRight, fast),
+    blushLeftAnchors: smoothPointList(previous.blushLeftAnchors, current.blushLeftAnchors, fast),
+    blushRightAnchors: smoothPointList(previous.blushRightAnchors, current.blushRightAnchors, fast),
+    lipOuter: smoothPointList(previous.lipOuter, current.lipOuter, fast),
+    lipInner: smoothPointList(previous.lipInner, current.lipInner, fast),
     hasPreciseMakeup: Boolean(current.hasPreciseMakeup),
-    eyeDistance: smoothNumber(previous.eyeDistance, current.eyeDistance),
-    faceWidth: smoothNumber(previous.faceWidth, current.faceWidth),
-    faceHeight: smoothNumber(previous.faceHeight, current.faceHeight),
-    roll: smoothNumber(previous.roll, current.roll),
-    yaw: smoothNumber(previous.yaw, current.yaw),
+    eyeDistance: smoothNumber(previous.eyeDistance, current.eyeDistance, fast),
+    faceWidth: smoothNumber(previous.faceWidth, current.faceWidth, fast),
+    faceHeight: smoothNumber(previous.faceHeight, current.faceHeight, slow),
+    roll: smoothNumber(previous.roll, current.roll, fast),
+    yaw: smoothNumber(previous.yaw, current.yaw, fast),
   };
 }
 
@@ -1936,6 +1979,13 @@ function drawLipstickMask(ctx, outerPoints, innerPoints, color, opacity, blurPx,
   }
 }
 
+function rgbaWithAlpha(color, alpha) {
+  const match = String(color).match(/rgba?\(([^)]+)\)/);
+  if (!match) return color;
+  const parts = match[1].split(',').map(part => part.trim());
+  return `rgba(${parts[0]}, ${parts[1]}, ${parts[2]}, ${alpha})`;
+}
+
 function drawBlush(ctx, center, faceWidth, color) {
   if (!center) return;
   const radiusX = faceWidth * 0.105 * BLUSH_SCALE;
@@ -1947,9 +1997,15 @@ function drawBlush(ctx, center, faceWidth, color) {
   layerCtx.save();
   layerCtx.filter = `blur(${BLUSH_BLUR}px)`;
   layerCtx.globalAlpha = BLUSH_OPACITY;
-  layerCtx.fillStyle = color;
+  layerCtx.translate(center.x, center.y);
+  layerCtx.scale(radiusX, radiusY);
+  const gradient = layerCtx.createRadialGradient(0, 0, 0, 0, 0, 1);
+  gradient.addColorStop(0, rgbaWithAlpha(color, 0.95));
+  gradient.addColorStop(0.48, rgbaWithAlpha(color, 0.36));
+  gradient.addColorStop(1, rgbaWithAlpha(color, 0));
+  layerCtx.fillStyle = gradient;
   layerCtx.beginPath();
-  layerCtx.ellipse(center.x, center.y, radiusX, radiusY, 0, 0, Math.PI * 2);
+  layerCtx.arc(0, 0, 1, 0, Math.PI * 2);
   layerCtx.fill();
   layerCtx.restore();
   ctx.drawImage(layer, 0, 0);
@@ -2056,22 +2112,53 @@ function drawAccessoryOverlay() {
   if (accessoryCanvas.width !== width) accessoryCanvas.width = width;
   if (accessoryCanvas.height !== height) accessoryCanvas.height = height;
 
+  const now = performance.now();
+  accessoryState.frameCount += 1;
+  if (now - accessoryState.fpsLastAt >= 500) {
+    accessoryState.fps = (accessoryState.frameCount * 1000) / (now - accessoryState.fpsLastAt);
+    accessoryState.frameCount = 0;
+    accessoryState.fpsLastAt = now;
+  }
+
   const ctx = accessoryCanvas.getContext('2d');
   ctx.clearRect(0, 0, width, height);
   drawAccessoriesOnContext(ctx, accessoryState.smoothed);
+  updateTrackingDebug();
   accessoryState.raf = requestAnimationFrame(drawAccessoryOverlay);
 }
 
+function drawVisibleWebcamFrame(ctx, width, height) {
+  if (!webcamVideo) return;
+  if (accessoryState.mirror) {
+    ctx.drawImage(webcamVideo, 0, 0, width, height);
+    drawAccessoriesOnContext(ctx, accessoryState.smoothed);
+    return;
+  }
+
+  ctx.save();
+  ctx.translate(width, 0);
+  ctx.scale(-1, 1);
+  ctx.drawImage(webcamVideo, 0, 0, width, height);
+  drawAccessoriesOnContext(ctx, accessoryState.smoothed);
+  ctx.restore();
+}
+
 async function updateAccessoryLandmarks() {
-  if (accessoryState.processing || !webcamStream || !webcamVideo || !webcamCanvas) return;
+  if (accessoryState.processing || !webcamStream || !webcamVideo || !webcamCanvas) {
+    updateTrackingDebug();
+    return;
+  }
   if (!webcamVideo.videoWidth || !webcamVideo.videoHeight) return;
 
   accessoryState.processing = true;
+  const requestId = accessoryState.requestId + 1;
+  accessoryState.requestId = requestId;
+  const startedAt = performance.now();
   try {
     webcamCanvas.width = webcamVideo.videoWidth;
     webcamCanvas.height = webcamVideo.videoHeight;
     webcamCanvas.getContext('2d').drawImage(webcamVideo, 0, 0);
-    const frameBlob = dataUrlToBlob(webcamCanvas.toDataURL('image/jpeg', 0.72));
+    const frameBlob = dataUrlToBlob(webcamCanvas.toDataURL('image/jpeg', 0.56));
     if (!frameBlob) return;
 
     const fd = new FormData();
@@ -2081,12 +2168,17 @@ async function updateAccessoryLandmarks() {
     fd.append('saveOverlay', 'false');
     const res = await fetch('/api/landmarks', { method: 'POST', body: fd });
     const data = await res.json();
+    if (requestId < accessoryState.appliedRequestId) return;
     if (!res.ok || !data.ok) return;
 
     const measurements = getAccessoryMeasurements(data);
     if (!measurements) return;
+    accessoryState.appliedRequestId = requestId;
+    accessoryState.lastLatencyMs = performance.now() - startedAt;
+    accessoryState.lastLandmarkAt = performance.now();
     accessoryState.measurements = measurements;
     accessoryState.smoothed = smoothAccessoryMeasurements(accessoryState.smoothed, measurements);
+    updateTrackingDebug(true);
   } catch (_) {
     // Keep the last good smoothed measurements during short detection failures.
   } finally {
@@ -2099,7 +2191,7 @@ function startAccessoryFilter() {
   if (!accessoryState.raf) accessoryState.raf = requestAnimationFrame(drawAccessoryOverlay);
   if (!accessoryState.timer) {
     updateAccessoryLandmarks();
-    accessoryState.timer = setInterval(updateAccessoryLandmarks, 420);
+    accessoryState.timer = setInterval(updateAccessoryLandmarks, LANDMARK_POLL_MS);
   }
 }
 
@@ -2109,6 +2201,9 @@ function stopAccessoryFilter() {
   accessoryState.processing = false;
   accessoryState.measurements = null;
   accessoryState.smoothed = null;
+  accessoryState.lastLatencyMs = null;
+  accessoryState.lastLandmarkAt = 0;
+  updateTrackingDebug(true);
   if (accessoryCanvas) {
     const ctx = accessoryCanvas.getContext('2d');
     ctx.clearRect(0, 0, accessoryCanvas.width || 1, accessoryCanvas.height || 1);
@@ -2233,8 +2328,7 @@ if ($('#btnCapture')) $('#btnCapture').addEventListener('click', () => {
   webcamCanvas.width = webcamVideo.videoWidth || 640;
   webcamCanvas.height = webcamVideo.videoHeight || 480;
   const captureCtx = webcamCanvas.getContext('2d');
-  captureCtx.drawImage(webcamVideo, 0, 0);
-  drawAccessoriesOnContext(captureCtx, accessoryState.smoothed);
+  drawVisibleWebcamFrame(captureCtx, webcamCanvas.width, webcamCanvas.height);
   const dataUrl = webcamCanvas.toDataURL('image/jpeg');
   stopWebcam();
   /* show in preview */
