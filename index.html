@@ -226,9 +226,52 @@
               <h3>Webcam Capture</h3>
               <button class="btn btn-ghost btn-xs" id="btnCloseWebcam">✕ Close</button>
             </div>
-            <div class="webcam-body">
-              <video id="webcamVideo" autoplay playsinline muted></video>
-              <canvas id="webcamCanvas" hidden></canvas>
+            <div class="webcam-tryon-layout">
+              <div class="webcam-preview-col">
+                <div class="webcam-body">
+                  <video id="webcamVideo" autoplay playsinline muted></video>
+                  <canvas id="accessoryCanvas" aria-hidden="true"></canvas>
+                  <canvas id="webcamCanvas" hidden></canvas>
+                </div>
+              </div>
+              <aside class="accessory-catalog" aria-label="Virtual try-on catalog">
+                <div class="catalog-topbar">
+                  <div>
+                    <div class="catalog-kicker">Virtual try-on</div>
+                    <div class="catalog-title" id="catalogTitle">Categories</div>
+                  </div>
+                  <button class="btn btn-ghost btn-xs" id="catalogBackBtn" type="button">← Back</button>
+                </div>
+
+                <div class="catalog-breadcrumb" id="catalogBreadcrumb">Main menu</div>
+                <div class="catalog-menu" id="catalogMenu"></div>
+
+                <div class="catalog-selected">
+                  <div><span>Glasses</span><strong id="selectedGlassesName">Off</strong></div>
+                  <div><span>Hat</span><strong id="selectedHatName">Off</strong></div>
+                  <div><span>Earrings</span><strong id="selectedEarringsName">Off</strong></div>
+                  <div><span>Necklace</span><strong id="selectedNecklaceName">Off</strong></div>
+                  <div><span>Lipstick</span><strong id="selectedLipstickName">Off</strong></div>
+                  <div><span>Blush</span><strong id="selectedBlushName">Off</strong></div>
+                  <div><span>Mirror</span><strong id="mirrorStatus">Off</strong></div>
+                  <div><span>Debug</span><strong id="makeupDebugStatus">Debug anchors off</strong></div>
+                </div>
+
+                <div class="catalog-actions">
+                  <button class="btn btn-outline btn-sm" id="catalogClearBtn" type="button">Clear Filters</button>
+                  <button class="btn btn-outline btn-sm" id="mirrorToggleBtn" type="button">Mirror Off</button>
+                </div>
+
+                <div class="catalog-controls">
+                  <span>A accessories</span>
+                  <span>M makeup</span>
+                  <span>B back</span>
+                  <span>0 clear</span>
+                  <span>D debug anchors</span>
+                  <span>R mirror</span>
+                  <span>Q / ESC close</span>
+                </div>
+              </aside>
             </div>
             <div id="liveOutputWrap" style="display:none;padding:6px 0;">
               <img id="liveOutput" alt="Live preview"

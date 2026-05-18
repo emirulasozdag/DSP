@@ -3750,6 +3750,11 @@ def script_page():
     return resp
 
 
+@app.get("/assets/<path:filename>")
+def assets_file(filename):
+    return send_from_directory(ROOT / "assets", filename)
+
+
 @app.get("/results/<path:filename>")
 def results_file(filename):
     return send_from_directory(RESULTS_DIR, filename)
@@ -3838,6 +3843,7 @@ def api_landmarks():
     raw_mediapipe = []
     include_reduced68 = request.form.get("includeReduced68", "false").lower() == "true"
     response_mode = request.form.get("landmarkMode", "raw").strip().lower()  # raw | reduced68 | both
+    save_overlay = request.form.get("saveOverlay", "true").lower() != "false"
 
     confidence = 72.0  # default: last-resort fallback
 
@@ -3875,11 +3881,12 @@ def api_landmarks():
             points.append({"id": idx, "x": int(px), "y": int(py)})
         print(f"/api/landmarks: using fallback synthetic landmarks ({len(points)} points)")
 
-    overlay = image.copy()
-    for p in points:
-        cv2.circle(overlay, (p["x"], p["y"]), 1, (255, 0, 255), -1)
-
-    saved = _save_image(overlay, "landmarks")
+    saved = None
+    if save_overlay:
+        overlay = image.copy()
+        for p in points:
+            cv2.circle(overlay, (p["x"], p["y"]), 1, (255, 0, 255), -1)
+        saved = _save_image(overlay, "landmarks")
     elapsed_ms = (time.perf_counter() - started) * 1000.0
 
     return jsonify(

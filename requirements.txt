@@ -9,3 +9,4 @@ python-dotenv==1.2.2
 # Uygulama mediapipe olmadan Haar cascade fallback ile çalışır.
 scikit-image==0.26.0
 pillow==12.2.0
+mediapipe>=0.10.21; python_version >= "3.9" and python_version < "3.13"

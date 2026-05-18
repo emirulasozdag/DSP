@@ -1392,6 +1392,728 @@ function updateAgeOffsetLabel(offset) { } /* handled inside updateApparentAge */
 /* ═══════════════════ WEBCAM (FR-3.8.3) ═══════════════════ */
 let webcamStream = null;
 const webcamCard = $('#webcamCard'), webcamVideo = $('#webcamVideo'), webcamCanvas = $('#webcamCanvas');
+const webcamBody = $('.webcam-body');
+const accessoryCanvas = $('#accessoryCanvas');
+const selectedFilterEls = {
+  glasses: $('#selectedGlassesName'),
+  hat: $('#selectedHatName'),
+  earrings: $('#selectedEarringsName'),
+  necklace: $('#selectedNecklaceName'),
+  lipstick: $('#selectedLipstickName'),
+  blush: $('#selectedBlushName'),
+};
+const catalogTitle = $('#catalogTitle');
+const catalogBreadcrumb = $('#catalogBreadcrumb');
+const catalogMenu = $('#catalogMenu');
+const catalogBackBtn = $('#catalogBackBtn');
+const catalogClearBtn = $('#catalogClearBtn');
+const mirrorToggleBtn = $('#mirrorToggleBtn');
+const mirrorStatus = $('#mirrorStatus');
+
+const GLASSES_WIDTH_FACTOR_WEB = 2.45;
+const HAT_WIDTH_FACTOR_WEB = 1.55;
+const HAT_Y_OFFSET_FACTOR_WEB = -0.45;
+const HAT_BOTTOM_ALIGNMENT_WEB = 0.55;
+const LIPSTICK_OUTER_LANDMARKS = [61, 146, 91, 181, 84, 17, 314, 405, 321, 375, 291, 308];
+const LIPSTICK_INNER_LANDMARKS = [78, 95, 88, 178, 87, 14, 317, 402, 318, 324];
+const BLUSH_LEFT_LANDMARKS = [50, 117, 118, 119, 123, 187];
+const BLUSH_RIGHT_LANDMARKS = [280, 346, 347, 348, 352, 411];
+const LIPSTICK_OPACITY = 0.68;
+const LIPSTICK_BLUR = 2.2;
+const BLUSH_OPACITY = 0.34;
+const BLUSH_BLUR = 18;
+const BLUSH_X_OFFSET = 0.015;
+const BLUSH_Y_OFFSET = 0.030;
+const BLUSH_SCALE = 1.0;
+
+const FILTER_CATALOG = {
+  glasses: [
+    { name: 'Model 1', src: '/assets/glasses_1.png', image: new Image() },
+    { name: 'Model 2', src: '/assets/glasses_2.png', image: new Image() },
+    { name: 'Model 3', src: '/assets/glasses_3.png', image: new Image() },
+  ],
+  hat: [
+    { name: 'Model 1', src: '/assets/hat_1.png', image: new Image() },
+    { name: 'Model 2', src: '/assets/hat_2.png', image: new Image() },
+    { name: 'Model 3', src: '/assets/hat_3.png', image: new Image() },
+  ],
+  earrings: [
+    { name: 'Model 1', src: '/assets/earring_1.png', image: new Image() },
+    { name: 'Model 2', src: '/assets/earring_2.png', image: new Image() },
+    { name: 'Model 3', src: '/assets/earring_3.png', image: new Image() },
+  ],
+  necklace: [
+    { name: 'Model 1', src: '/assets/necklace_1.png', image: new Image() },
+    { name: 'Model 2', src: '/assets/necklace_2.png', image: new Image() },
+    { name: 'Model 3', src: '/assets/necklace_3.png', image: new Image() },
+  ],
+  lipstick: [
+    { name: 'Red', color: 'rgba(190, 24, 62, 0.58)', stroke: 'rgba(255, 210, 220, 0.28)' },
+    { name: 'Pink', color: 'rgba(236, 72, 153, 0.52)', stroke: 'rgba(255, 220, 240, 0.25)' },
+    { name: 'Nude', color: 'rgba(178, 112, 90, 0.45)', stroke: 'rgba(255, 235, 225, 0.22)' },
+    { name: 'Berry', color: 'rgba(126, 34, 98, 0.58)', stroke: 'rgba(255, 210, 240, 0.24)' },
+  ],
+  blush: [
+    { name: 'Pink', color: 'rgba(244, 114, 182, 0.28)' },
+    { name: 'Peach', color: 'rgba(251, 146, 60, 0.26)' },
+    { name: 'Coral', color: 'rgba(248, 113, 113, 0.28)' },
+  ],
+};
+
+const CATEGORY_TREE = {
+  accessories: {
+    title: 'Accessories',
+    subcategories: [
+      { key: 'glasses', label: 'Glasses', hint: 'Eye-locked models' },
+      { key: 'hat', label: 'Hats', hint: 'Top-head placement' },
+      { key: 'earrings', label: 'Earrings', hint: 'Side-face tracking' },
+      { key: 'necklace', label: 'Necklace', hint: 'Lower chin / neck' },
+    ],
+  },
+  makeup: {
+    title: 'Makeup',
+    subcategories: [
+      { key: 'lipstick', label: 'Lipstick', hint: 'Lip landmark color' },
+      { key: 'blush', label: 'Blush', hint: 'Cheek color wash' },
+    ],
+  },
+};
+
+const SUBCATEGORY_LABELS = {
+  glasses: 'Glasses',
+  hat: 'Hats',
+  earrings: 'Earrings',
+  necklace: 'Necklace',
+  lipstick: 'Lipstick',
+  blush: 'Blush',
+};
+
+const accessoryState = {
+  raf: null,
+  timer: null,
+  processing: false,
+  measurements: null,
+  smoothed: null,
+  alpha: 0.32,
+  loadedImages: 0,
+  totalImages: 12,
+  menuLevel: 'main',
+  category: null,
+  subcategory: null,
+  selected: {
+    glasses: null,
+    hat: null,
+    earrings: null,
+    necklace: null,
+    lipstick: null,
+    blush: null,
+  },
+  debugMakeup: false,
+  mirror: false,
+};
+
+['glasses', 'hat', 'earrings', 'necklace'].forEach(kind => {
+  FILTER_CATALOG[kind].forEach(item => {
+    item.image.onload = () => { accessoryState.loadedImages += 1; };
+    item.image.src = item.src;
+  });
+});
+
+function accessoriesReady() {
+  return accessoryState.loadedImages >= accessoryState.totalImages;
+}
+
+function setCatalogView(level, category = null, subcategory = null) {
+  accessoryState.menuLevel = level;
+  accessoryState.category = category;
+  accessoryState.subcategory = subcategory;
+  renderTryOnCatalog();
+}
+
+function clearTryOnFilters() {
+  Object.keys(accessoryState.selected).forEach(key => { accessoryState.selected[key] = null; });
+  updateSelectedFilterLabels();
+  renderTryOnCatalog();
+}
+
+function updateSelectedFilterLabels() {
+  Object.entries(selectedFilterEls).forEach(([key, el]) => {
+    if (!el) return;
+    const selectedIndex = accessoryState.selected[key];
+    const item = selectedIndex !== null ? FILTER_CATALOG[key]?.[selectedIndex] : null;
+    el.textContent = item ? item.name : 'Off';
+  });
+  if (mirrorStatus) mirrorStatus.textContent = accessoryState.mirror ? 'On' : 'Off';
+  if (mirrorToggleBtn) mirrorToggleBtn.textContent = accessoryState.mirror ? 'Mirror On' : 'Mirror Off';
+  const debugEl = $('#makeupDebugStatus');
+  if (debugEl) debugEl.textContent = accessoryState.debugMakeup ? 'Debug anchors on' : 'Debug anchors off';
+}
+
+function setMirrorMode(enabled) {
+  accessoryState.mirror = Boolean(enabled);
+  if (webcamBody) webcamBody.classList.toggle('is-mirrored', accessoryState.mirror);
+  updateSelectedFilterLabels();
+}
+
+function navCardHtml(action, title, sub) {
+  return `<button class="catalog-nav-card" type="button" data-action="${action}">
+    <span class="catalog-card-title">${title}</span>
+    <span class="catalog-card-sub">${sub}</span>
+  </button>`;
+}
+
+function modelCardHtml(kind, item, index) {
+  const active = accessoryState.selected[kind] === index ? ' is-active' : '';
+  return `<button class="catalog-model-card${active}" type="button" data-action="select-model" data-kind="${kind}" data-index="${index}">
+    <img src="${item.src}" alt="${SUBCATEGORY_LABELS[kind]} ${index + 1}" />
+    <span>${item.name}</span>
+  </button>`;
+}
+
+function swatchHtml(kind, item, index) {
+  const active = accessoryState.selected[kind] === index ? ' is-active' : '';
+  const color = item.color.replace(/,\s*0\.\d+\)/, ', 1)');
+  return `<button class="catalog-swatch${active}" type="button" data-action="select-model" data-kind="${kind}" data-index="${index}">
+    <span class="catalog-swatch-dot" style="background:${color}"></span>
+    <span>${item.name}</span>
+  </button>`;
+}
+
+function renderTryOnCatalog() {
+  if (!catalogMenu) return;
+
+  if (catalogBackBtn) catalogBackBtn.style.visibility = accessoryState.menuLevel === 'main' ? 'hidden' : 'visible';
+
+  if (accessoryState.menuLevel === 'main') {
+    if (catalogTitle) catalogTitle.textContent = 'Categories';
+    if (catalogBreadcrumb) catalogBreadcrumb.textContent = 'Main menu';
+    catalogMenu.innerHTML = [
+      navCardHtml('category-accessories', 'Accessories', 'Glasses, hats, earrings, necklace'),
+      navCardHtml('category-makeup', 'Makeup', 'Lipstick and blush colors'),
+    ].join('');
+    updateSelectedFilterLabels();
+    return;
+  }
+
+  if (accessoryState.menuLevel === 'subcategories') {
+    const category = CATEGORY_TREE[accessoryState.category];
+    if (catalogTitle) catalogTitle.textContent = category.title;
+    if (catalogBreadcrumb) catalogBreadcrumb.textContent = `Main menu → ${category.title}`;
+    catalogMenu.innerHTML = category.subcategories
+      .map(sub => navCardHtml(`subcategory-${sub.key}`, sub.label, sub.hint))
+      .join('');
+    updateSelectedFilterLabels();
+    return;
+  }
+
+  const kind = accessoryState.subcategory;
+  const category = CATEGORY_TREE[accessoryState.category];
+  if (catalogTitle) catalogTitle.textContent = SUBCATEGORY_LABELS[kind];
+  if (catalogBreadcrumb) catalogBreadcrumb.textContent = `Main menu → ${category.title} → ${SUBCATEGORY_LABELS[kind]}`;
+  const items = FILTER_CATALOG[kind] || [];
+  const isMakeup = kind === 'lipstick' || kind === 'blush';
+  catalogMenu.innerHTML = `<div class="${isMakeup ? 'catalog-swatch-grid' : 'catalog-model-grid'}">
+    ${items.map((item, index) => isMakeup ? swatchHtml(kind, item, index) : modelCardHtml(kind, item, index)).join('')}
+  </div>`;
+  updateSelectedFilterLabels();
+}
+
+function catalogBack() {
+  if (accessoryState.menuLevel === 'items') setCatalogView('subcategories', accessoryState.category, null);
+  else if (accessoryState.menuLevel === 'subcategories') setCatalogView('main', null, null);
+}
+
+if (catalogMenu) {
+  catalogMenu.addEventListener('click', event => {
+    const button = event.target.closest('button[data-action]');
+    if (!button) return;
+    const action = button.dataset.action;
+    if (action === 'category-accessories') setCatalogView('subcategories', 'accessories', null);
+    else if (action === 'category-makeup') setCatalogView('subcategories', 'makeup', null);
+    else if (action.startsWith('subcategory-')) setCatalogView('items', accessoryState.category, action.replace('subcategory-', ''));
+    else if (action === 'select-model') {
+      accessoryState.selected[button.dataset.kind] = Number(button.dataset.index);
+      updateSelectedFilterLabels();
+      renderTryOnCatalog();
+    }
+  });
+}
+
+if (catalogBackBtn) catalogBackBtn.addEventListener('click', catalogBack);
+if (catalogClearBtn) catalogClearBtn.addEventListener('click', clearTryOnFilters);
+if (mirrorToggleBtn) mirrorToggleBtn.addEventListener('click', () => setMirrorMode(!accessoryState.mirror));
+setMirrorMode(false);
+renderTryOnCatalog();
+
+document.addEventListener('keydown', event => {
+  if (!webcamCard || webcamCard.style.display === 'none') return;
+  const tag = String(event.target?.tagName || '').toLowerCase();
+  if (tag === 'input' || tag === 'textarea' || tag === 'select') return;
+
+  const key = event.key.toLowerCase();
+  if (key === 'a') {
+    setCatalogView('subcategories', 'accessories', null);
+  } else if (key === 'm') {
+    setCatalogView('subcategories', 'makeup', null);
+  } else if (key === 'b') {
+    catalogBack();
+  } else if (key === '0') {
+    clearTryOnFilters();
+  } else if (key === 'd') {
+    accessoryState.debugMakeup = !accessoryState.debugMakeup;
+    updateSelectedFilterLabels();
+  } else if (key === 'r') {
+    setMirrorMode(!accessoryState.mirror);
+  } else if (key === 'q' || event.key === 'Escape') {
+    stopWebcam();
+  } else {
+    return;
+  }
+  event.preventDefault();
+});
+
+function smoothNumber(previous, current, alpha = accessoryState.alpha) {
+  if (!Number.isFinite(previous)) return current;
+  return ((1 - alpha) * previous) + (alpha * current);
+}
+
+function smoothPoint(previous, current, alpha = accessoryState.alpha) {
+  if (!previous) return current;
+  return {
+    x: smoothNumber(previous.x, current.x, alpha),
+    y: smoothNumber(previous.y, current.y, alpha),
+  };
+}
+
+function smoothPointList(previous, current, alpha = accessoryState.alpha) {
+  if (!Array.isArray(current)) return current;
+  return current.map((point, index) => smoothPoint(previous?.[index], point, alpha));
+}
+
+function smoothAccessoryMeasurements(previous, current) {
+  if (!previous) return current;
+  return {
+    eyeCenter: smoothPoint(previous.eyeCenter, current.eyeCenter),
+    noseBridge: smoothPoint(previous.noseBridge, current.noseBridge),
+    forehead: smoothPoint(previous.forehead, current.forehead),
+    earringLeft: smoothPoint(previous.earringLeft, current.earringLeft),
+    earringRight: smoothPoint(previous.earringRight, current.earringRight),
+    necklaceAnchor: smoothPoint(previous.necklaceAnchor, current.necklaceAnchor),
+    blushLeft: smoothPoint(previous.blushLeft, current.blushLeft),
+    blushRight: smoothPoint(previous.blushRight, current.blushRight),
+    blushLeftAnchors: smoothPointList(previous.blushLeftAnchors, current.blushLeftAnchors),
+    blushRightAnchors: smoothPointList(previous.blushRightAnchors, current.blushRightAnchors),
+    lipOuter: smoothPointList(previous.lipOuter, current.lipOuter),
+    lipInner: smoothPointList(previous.lipInner, current.lipInner),
+    hasPreciseMakeup: Boolean(current.hasPreciseMakeup),
+    eyeDistance: smoothNumber(previous.eyeDistance, current.eyeDistance),
+    faceWidth: smoothNumber(previous.faceWidth, current.faceWidth),
+    faceHeight: smoothNumber(previous.faceHeight, current.faceHeight),
+    roll: smoothNumber(previous.roll, current.roll),
+    yaw: smoothNumber(previous.yaw, current.yaw),
+  };
+}
+
+function dist2d(a, b) {
+  return Math.hypot(Number(a.x) - Number(b.x), Number(a.y) - Number(b.y));
+}
+
+function avgPoints(points, indices) {
+  const selected = indices.map(i => points[i]).filter(Boolean);
+  if (!selected.length) return null;
+  const sum = selected.reduce((acc, p) => ({ x: acc.x + Number(p.x), y: acc.y + Number(p.y) }), { x: 0, y: 0 });
+  return { x: sum.x / selected.length, y: sum.y / selected.length };
+}
+
+function pointList(points, indices) {
+  return indices.map(i => points[i]).filter(Boolean).map(p => ({ x: Number(p.x), y: Number(p.y) }));
+}
+
+function getAccessoryMeasurements(data) {
+  const points = (Array.isArray(data.rawLandmarks) && data.rawLandmarks.length >= 468)
+    ? data.rawLandmarks
+    : (Array.isArray(data.landmarks) ? data.landmarks : []);
+  if (!points.length) return null;
+
+  let leftEye, rightEye, noseBridge, forehead, faceWidth, faceHeight, yaw;
+  let earringLeft, earringRight, necklaceAnchor, blushLeft, blushRight, blushLeftAnchors, blushRightAnchors, lipOuter, lipInner;
+  let hasPreciseMakeup = false;
+  if (points.length >= 468) {
+    leftEye = avgPoints(points, [33, 133]);
+    rightEye = avgPoints(points, [362, 263]);
+    noseBridge = avgPoints(points, [168, 6, 197]);
+    forehead = avgPoints(points, [10, 151, 109, 338]);
+    const leftCheek = points[234];
+    const rightCheek = points[454];
+    const chin = points[152];
+    const noseTip = points[1];
+    if (!leftEye || !rightEye || !noseBridge || !forehead || !leftCheek || !rightCheek || !chin || !noseTip) return null;
+    faceWidth = dist2d(leftCheek, rightCheek);
+    faceHeight = dist2d(forehead, chin);
+    const faceCenter = { x: (Number(leftCheek.x) + Number(rightCheek.x)) / 2, y: (Number(leftCheek.y) + Number(rightCheek.y)) / 2 };
+    yaw = (Number(noseTip.x) - faceCenter.x) / Math.max(faceWidth, 1);
+    earringLeft = { x: Number(leftCheek.x) - faceWidth * 0.12, y: Number(leftCheek.y) + faceHeight * 0.03 };
+    earringRight = { x: Number(rightCheek.x) + faceWidth * 0.12, y: Number(rightCheek.y) + faceHeight * 0.03 };
+    necklaceAnchor = { x: Number(chin.x), y: Number(chin.y) + faceHeight * 0.23 };
+    blushLeftAnchors = pointList(points, BLUSH_LEFT_LANDMARKS);
+    blushRightAnchors = pointList(points, BLUSH_RIGHT_LANDMARKS);
+    blushLeft = avgPoints(points, BLUSH_LEFT_LANDMARKS);
+    blushRight = avgPoints(points, BLUSH_RIGHT_LANDMARKS);
+    lipOuter = pointList(points, LIPSTICK_OUTER_LANDMARKS);
+    lipInner = pointList(points, LIPSTICK_INNER_LANDMARKS);
+    hasPreciseMakeup = lipOuter.length === LIPSTICK_OUTER_LANDMARKS.length
+      && lipInner.length === LIPSTICK_INNER_LANDMARKS.length
+      && blushLeftAnchors.length === BLUSH_LEFT_LANDMARKS.length
+      && blushRightAnchors.length === BLUSH_RIGHT_LANDMARKS.length;
+  } else {
+    // 68-point fallback from the backend. It is less precise than MediaPipe,
+    // but it still gives stable eye, brow, and jaw locations for the demo.
+    leftEye = avgPoints(points, [36, 37, 38, 39, 40, 41]);
+    rightEye = avgPoints(points, [42, 43, 44, 45, 46, 47]);
+    noseBridge = avgPoints(points, [27, 28, 29, 30]);
+    const leftBrow = avgPoints(points, [17, 18, 19, 20, 21]);
+    const rightBrow = avgPoints(points, [22, 23, 24, 25, 26]);
+    const leftJaw = points[0];
+    const rightJaw = points[16];
+    const chin = points[8];
+    const noseTip = points[33] || noseBridge;
+    if (!leftEye || !rightEye || !noseBridge || !leftBrow || !rightBrow || !leftJaw || !rightJaw || !chin) return null;
+    faceWidth = dist2d(leftJaw, rightJaw);
+    const browCenter = {
+      x: (Number(leftBrow.x) + Number(rightBrow.x)) / 2,
+      y: (Number(leftBrow.y) + Number(rightBrow.y)) / 2,
+    };
+    forehead = { x: browCenter.x, y: browCenter.y - (faceWidth * 0.18) };
+    faceHeight = dist2d(forehead, chin);
+    const faceCenter = { x: (Number(leftJaw.x) + Number(rightJaw.x)) / 2, y: (Number(leftJaw.y) + Number(rightJaw.y)) / 2 };
+    yaw = (Number(noseTip.x) - faceCenter.x) / Math.max(faceWidth, 1);
+    earringLeft = { x: Number(leftJaw.x) - faceWidth * 0.08, y: Number(leftEye.y) + faceHeight * 0.22 };
+    earringRight = { x: Number(rightJaw.x) + faceWidth * 0.08, y: Number(rightEye.y) + faceHeight * 0.22 };
+    necklaceAnchor = { x: Number(chin.x), y: Number(chin.y) + faceHeight * 0.24 };
+    blushLeft = avgPoints(points, [2, 3, 31]) || leftJaw;
+    blushRight = avgPoints(points, [13, 14, 35]) || rightJaw;
+    blushLeftAnchors = [];
+    blushRightAnchors = [];
+    lipOuter = pointList(points, [48, 49, 50, 51, 52, 53, 54, 55, 56, 57, 58, 59]);
+    lipInner = pointList(points, [60, 61, 62, 63, 64, 65, 66, 67]);
+  }
+
+  const rawEyeCenter = {
+    x: (Number(leftEye.x) + Number(rightEye.x)) / 2,
+    y: (Number(leftEye.y) + Number(rightEye.y)) / 2,
+  };
+  const eyeCenter = {
+    x: (rawEyeCenter.x * 0.70) + (Number(noseBridge.x) * 0.30),
+    y: (rawEyeCenter.y * 0.70) + (Number(noseBridge.y) * 0.30),
+  };
+  const eyeDistance = dist2d(leftEye, rightEye);
+  const roll = Math.atan2(Number(rightEye.y) - Number(leftEye.y), Number(rightEye.x) - Number(leftEye.x));
+
+  if (!Number.isFinite(eyeDistance) || eyeDistance < 12 || !Number.isFinite(faceWidth)) return null;
+  return {
+    eyeCenter,
+    noseBridge,
+    forehead,
+    earringLeft,
+    earringRight,
+    necklaceAnchor,
+    blushLeft,
+    blushRight,
+    blushLeftAnchors,
+    blushRightAnchors,
+    lipOuter,
+    lipInner,
+    hasPreciseMakeup,
+    eyeDistance,
+    faceWidth,
+    faceHeight,
+    roll,
+    yaw,
+  };
+}
+
+function drawRotatedImage(ctx, image, centerX, centerY, width, height, angle) {
+  ctx.save();
+  ctx.translate(centerX, centerY);
+  ctx.rotate(angle);
+  ctx.drawImage(image, -width / 2, -height / 2, width, height);
+  ctx.restore();
+}
+
+function drawYawWarpedImage(ctx, image, centerX, centerY, width, height, angle, yaw) {
+  const yawClamped = Math.max(-0.35, Math.min(0.35, Number(yaw) || 0));
+  const yawAbs = Math.abs(yawClamped);
+  const visibleWidth = width * (1 - yawAbs * 0.16);
+  const farSideScale = 1 - yawAbs * 0.26;
+  const strips = 34;
+
+  ctx.save();
+  ctx.translate(centerX, centerY);
+  ctx.rotate(angle);
+
+  for (let i = 0; i < strips; i += 1) {
+    const t0 = i / strips;
+    const t1 = (i + 1) / strips;
+    const tm = (t0 + t1) / 2;
+    const sourceX = image.naturalWidth * t0;
+    const sourceW = Math.ceil(image.naturalWidth / strips);
+    const destX = (-visibleWidth / 2) + (visibleWidth * t0);
+    const destW = Math.ceil(visibleWidth / strips) + 1;
+    const farAmount = yawClamped >= 0 ? tm : (1 - tm);
+    const stripScale = 1 - ((1 - farSideScale) * farAmount);
+    const stripH = height * stripScale;
+    const ySkew = (tm - 0.5) * yawClamped * height * 0.16;
+    ctx.drawImage(image, sourceX, 0, sourceW, image.naturalHeight, destX, -stripH / 2 + ySkew, destW, stripH);
+  }
+
+  ctx.restore();
+}
+
+function drawFilledLandmarkShape(ctx, points, fill, stroke = null) {
+  if (!Array.isArray(points) || points.length < 3) return;
+  ctx.save();
+  ctx.beginPath();
+  ctx.moveTo(points[0].x, points[0].y);
+  points.slice(1).forEach(point => ctx.lineTo(point.x, point.y));
+  ctx.closePath();
+  ctx.fillStyle = fill;
+  ctx.fill();
+  if (stroke) {
+    ctx.strokeStyle = stroke;
+    ctx.lineWidth = 1.25;
+    ctx.stroke();
+  }
+  ctx.restore();
+}
+
+function drawSoftPolygonMask(ctx, points, color, opacity, blurPx, stroke = null) {
+  if (!Array.isArray(points) || points.length < 3) return;
+  const layer = document.createElement('canvas');
+  layer.width = ctx.canvas.width;
+  layer.height = ctx.canvas.height;
+  const layerCtx = layer.getContext('2d');
+  layerCtx.save();
+  layerCtx.filter = `blur(${blurPx}px)`;
+  layerCtx.globalAlpha = opacity;
+  drawFilledLandmarkShape(layerCtx, points, color, stroke);
+  layerCtx.restore();
+  ctx.drawImage(layer, 0, 0);
+}
+
+function drawLipstickMask(ctx, outerPoints, innerPoints, color, opacity, blurPx, stroke = null) {
+  if (!Array.isArray(outerPoints) || outerPoints.length < 3) return;
+  const layer = document.createElement('canvas');
+  layer.width = ctx.canvas.width;
+  layer.height = ctx.canvas.height;
+  const layerCtx = layer.getContext('2d');
+
+  layerCtx.save();
+  layerCtx.globalAlpha = opacity;
+  drawFilledLandmarkShape(layerCtx, outerPoints, color, null);
+  if (Array.isArray(innerPoints) && innerPoints.length >= 3) {
+    // Cut the inner mouth opening out of the lipstick mask so color stays on the lips.
+    layerCtx.globalCompositeOperation = 'destination-out';
+    layerCtx.globalAlpha = 1;
+    drawFilledLandmarkShape(layerCtx, innerPoints, 'rgba(0, 0, 0, 1)', null);
+  }
+  layerCtx.restore();
+
+  const blurred = document.createElement('canvas');
+  blurred.width = ctx.canvas.width;
+  blurred.height = ctx.canvas.height;
+  const blurredCtx = blurred.getContext('2d');
+  blurredCtx.save();
+  blurredCtx.filter = `blur(${blurPx}px)`;
+  blurredCtx.drawImage(layer, 0, 0);
+  blurredCtx.restore();
+  ctx.drawImage(blurred, 0, 0);
+
+  if (stroke) {
+    ctx.save();
+    ctx.globalAlpha = opacity * 0.35;
+    drawFilledLandmarkShape(ctx, outerPoints, 'rgba(0, 0, 0, 0)', stroke);
+    ctx.restore();
+  }
+}
+
+function drawBlush(ctx, center, faceWidth, color) {
+  if (!center) return;
+  const radiusX = faceWidth * 0.105 * BLUSH_SCALE;
+  const radiusY = faceWidth * 0.065 * BLUSH_SCALE;
+  const layer = document.createElement('canvas');
+  layer.width = ctx.canvas.width;
+  layer.height = ctx.canvas.height;
+  const layerCtx = layer.getContext('2d');
+  layerCtx.save();
+  layerCtx.filter = `blur(${BLUSH_BLUR}px)`;
+  layerCtx.globalAlpha = BLUSH_OPACITY;
+  layerCtx.fillStyle = color;
+  layerCtx.beginPath();
+  layerCtx.ellipse(center.x, center.y, radiusX, radiusY, 0, 0, Math.PI * 2);
+  layerCtx.fill();
+  layerCtx.restore();
+  ctx.drawImage(layer, 0, 0);
+}
+
+function drawMakeupDebug(ctx, measurements) {
+  if (!accessoryState.debugMakeup || !measurements) return;
+  const drawPoints = (points, color) => {
+    if (!Array.isArray(points)) return;
+    ctx.save();
+    ctx.fillStyle = color;
+    ctx.strokeStyle = color;
+    ctx.lineWidth = 1;
+    points.forEach(point => {
+      ctx.beginPath();
+      ctx.arc(point.x, point.y, 3, 0, Math.PI * 2);
+      ctx.fill();
+    });
+    if (points.length > 2) {
+      ctx.beginPath();
+      ctx.moveTo(points[0].x, points[0].y);
+      points.slice(1).forEach(point => ctx.lineTo(point.x, point.y));
+      ctx.closePath();
+      ctx.stroke();
+    }
+    ctx.restore();
+  };
+  drawPoints(measurements.lipOuter, 'rgba(255, 64, 128, 0.95)');
+  drawPoints(measurements.lipInner, 'rgba(255, 210, 80, 0.95)');
+  drawPoints(measurements.blushLeftAnchors, 'rgba(80, 220, 255, 0.95)');
+  drawPoints(measurements.blushRightAnchors, 'rgba(80, 220, 255, 0.95)');
+}
+
+function drawAccessoriesOnContext(ctx, measurements) {
+  if (!measurements) return;
+
+  const lipstickIndex = accessoryState.selected.lipstick;
+  if (lipstickIndex !== null && measurements.hasPreciseMakeup) {
+    const lipstick = FILTER_CATALOG.lipstick[lipstickIndex];
+    drawLipstickMask(ctx, measurements.lipOuter, measurements.lipInner, lipstick.color, LIPSTICK_OPACITY, LIPSTICK_BLUR, lipstick.stroke);
+  }
+
+  const blushIndex = accessoryState.selected.blush;
+  if (blushIndex !== null && measurements.hasPreciseMakeup) {
+    const blush = FILTER_CATALOG.blush[blushIndex];
+    const leftBlushCenter = {
+      x: measurements.blushLeft.x - (measurements.faceWidth * BLUSH_X_OFFSET),
+      y: measurements.blushLeft.y + (measurements.faceWidth * BLUSH_Y_OFFSET),
+    };
+    const rightBlushCenter = {
+      x: measurements.blushRight.x + (measurements.faceWidth * BLUSH_X_OFFSET),
+      y: measurements.blushRight.y + (measurements.faceWidth * BLUSH_Y_OFFSET),
+    };
+    drawBlush(ctx, leftBlushCenter, measurements.faceWidth, blush.color);
+    drawBlush(ctx, rightBlushCenter, measurements.faceWidth, blush.color);
+  }
+
+  const glassesIndex = accessoryState.selected.glasses;
+  if (glassesIndex !== null && accessoriesReady()) {
+    const glasses = FILTER_CATALOG.glasses[glassesIndex].image;
+    const glassesW = measurements.eyeDistance * GLASSES_WIDTH_FACTOR_WEB;
+    const glassesH = glassesW * (glasses.naturalHeight / glasses.naturalWidth);
+    const yawShift = (Number(measurements.yaw) || 0) * measurements.eyeDistance * 0.28;
+    const anchorX = (measurements.eyeCenter.x * 0.62) + (measurements.noseBridge.x * 0.38) + yawShift;
+    const anchorY = (measurements.eyeCenter.y * 0.62) + (measurements.noseBridge.y * 0.38) - (glassesH * 0.05);
+    drawYawWarpedImage(ctx, glasses, anchorX, anchorY, glassesW, glassesH, measurements.roll, measurements.yaw);
+  }
+
+  const hatIndex = accessoryState.selected.hat;
+  if (hatIndex !== null && accessoriesReady()) {
+    const hat = FILTER_CATALOG.hat[hatIndex].image;
+    const hatW = measurements.faceWidth * HAT_WIDTH_FACTOR_WEB;
+    const hatH = hatW * (hat.naturalHeight / hat.naturalWidth);
+    const hatY = measurements.forehead.y
+      - (hatH * HAT_BOTTOM_ALIGNMENT_WEB)
+      + (measurements.faceHeight * HAT_Y_OFFSET_FACTOR_WEB);
+    drawRotatedImage(ctx, hat, measurements.forehead.x, hatY + (hatH / 2), hatW, hatH, measurements.roll);
+  }
+
+  const earringsIndex = accessoryState.selected.earrings;
+  if (earringsIndex !== null && accessoriesReady()) {
+    const earrings = FILTER_CATALOG.earrings[earringsIndex].image;
+    const earringH = measurements.faceHeight * 0.24;
+    const earringW = earringH * (earrings.naturalWidth / earrings.naturalHeight);
+    drawRotatedImage(ctx, earrings, measurements.earringLeft.x, measurements.earringLeft.y, earringW, earringH, measurements.roll * 0.45);
+    drawRotatedImage(ctx, earrings, measurements.earringRight.x, measurements.earringRight.y, earringW, earringH, measurements.roll * 0.45);
+  }
+
+  const necklaceIndex = accessoryState.selected.necklace;
+  if (necklaceIndex !== null && accessoriesReady()) {
+    const necklace = FILTER_CATALOG.necklace[necklaceIndex].image;
+    const necklaceW = measurements.faceWidth * 1.62;
+    const necklaceH = necklaceW * (necklace.naturalHeight / necklace.naturalWidth);
+    drawRotatedImage(ctx, necklace, measurements.necklaceAnchor.x, measurements.necklaceAnchor.y, necklaceW, necklaceH, measurements.roll * 0.18);
+  }
+
+  drawMakeupDebug(ctx, measurements);
+}
+
+function drawAccessoryOverlay() {
+  if (!accessoryCanvas || !webcamVideo) return;
+  const width = webcamVideo.videoWidth || 640;
+  const height = webcamVideo.videoHeight || 480;
+  if (accessoryCanvas.width !== width) accessoryCanvas.width = width;
+  if (accessoryCanvas.height !== height) accessoryCanvas.height = height;
+
+  const ctx = accessoryCanvas.getContext('2d');
+  ctx.clearRect(0, 0, width, height);
+  drawAccessoriesOnContext(ctx, accessoryState.smoothed);
+  accessoryState.raf = requestAnimationFrame(drawAccessoryOverlay);
+}
+
+async function updateAccessoryLandmarks() {
+  if (accessoryState.processing || !webcamStream || !webcamVideo || !webcamCanvas) return;
+  if (!webcamVideo.videoWidth || !webcamVideo.videoHeight) return;
+
+  accessoryState.processing = true;
+  try {
+    webcamCanvas.width = webcamVideo.videoWidth;
+    webcamCanvas.height = webcamVideo.videoHeight;
+    webcamCanvas.getContext('2d').drawImage(webcamVideo, 0, 0);
+    const frameBlob = dataUrlToBlob(webcamCanvas.toDataURL('image/jpeg', 0.72));
+    if (!frameBlob) return;
+
+    const fd = new FormData();
+    fd.append('image', frameBlob, 'accessory-frame.jpg');
+    fd.append('includeReduced68', 'true');
+    fd.append('landmarkMode', 'both');
+    fd.append('saveOverlay', 'false');
+    const res = await fetch('/api/landmarks', { method: 'POST', body: fd });
+    const data = await res.json();
+    if (!res.ok || !data.ok) return;
+
+    const measurements = getAccessoryMeasurements(data);
+    if (!measurements) return;
+    accessoryState.measurements = measurements;
+    accessoryState.smoothed = smoothAccessoryMeasurements(accessoryState.smoothed, measurements);
+  } catch (_) {
+    // Keep the last good smoothed measurements during short detection failures.
+  } finally {
+    accessoryState.processing = false;
+  }
+}
+
+function startAccessoryFilter() {
+  if (!accessoryCanvas) return;
+  if (!accessoryState.raf) accessoryState.raf = requestAnimationFrame(drawAccessoryOverlay);
+  if (!accessoryState.timer) {
+    updateAccessoryLandmarks();
+    accessoryState.timer = setInterval(updateAccessoryLandmarks, 420);
+  }
+}
+
+function stopAccessoryFilter() {
+  if (accessoryState.timer) { clearInterval(accessoryState.timer); accessoryState.timer = null; }
+  if (accessoryState.raf) { cancelAnimationFrame(accessoryState.raf); accessoryState.raf = null; }
+  accessoryState.processing = false;
+  accessoryState.measurements = null;
+  accessoryState.smoothed = null;
+  if (accessoryCanvas) {
+    const ctx = accessoryCanvas.getContext('2d');
+    ctx.clearRect(0, 0, accessoryCanvas.width || 1, accessoryCanvas.height || 1);
+  }
+}
 
 /* ═══════════════════ WEBCAM LIVE MODE ═══════════════════ */
 let _liveTimer = null;
@@ -1470,20 +2192,36 @@ function startWebcam() {
     toast('Webcam is not supported in this browser.', 'warning');
     return;
   }
+  if (webcamCard && webcamCard.parentElement !== document.body) {
+    document.body.appendChild(webcamCard);
+  }
+  document.body.classList.add('tryon-open');
   uploadCard.style.display = 'none';
   previewCard.style.display = 'none';
-  webcamCard.style.display = 'block';
+  webcamCard.style.display = 'flex';
+  if (webcamStream) {
+    startAccessoryFilter();
+    return;
+  }
   navigator.mediaDevices.getUserMedia({ video: { width: { ideal: 640 }, height: { ideal: 480 } }, audio: false })
-    .then(stream => { webcamStream = stream; webcamVideo.srcObject = stream; })
+    .then(stream => {
+      webcamStream = stream;
+      webcamVideo.srcObject = stream;
+      webcamVideo.onloadedmetadata = () => startAccessoryFilter();
+      startAccessoryFilter();
+    })
     .catch(err => {
       webcamCard.style.display = 'none';
+      document.body.classList.remove('tryon-open');
       uploadCard.style.display = '';
       toast('Could not access webcam: ' + err.message, 'error');
     });
 }
 function stopWebcam() {
   stopLiveMode();
+  stopAccessoryFilter();
   if (webcamStream) { webcamStream.getTracks().forEach(t => t.stop()); webcamStream = null; }
+  document.body.classList.remove('tryon-open');
   webcamCard.style.display = 'none';
   uploadCard.style.display = '';
 }
@@ -1494,7 +2232,9 @@ if ($('#btnCapture')) $('#btnCapture').addEventListener('click', () => {
   if (!webcamVideo || !webcamCanvas) return;
   webcamCanvas.width = webcamVideo.videoWidth || 640;
   webcamCanvas.height = webcamVideo.videoHeight || 480;
-  webcamCanvas.getContext('2d').drawImage(webcamVideo, 0, 0);
+  const captureCtx = webcamCanvas.getContext('2d');
+  captureCtx.drawImage(webcamVideo, 0, 0);
+  drawAccessoriesOnContext(captureCtx, accessoryState.smoothed);
   const dataUrl = webcamCanvas.toDataURL('image/jpeg');
   stopWebcam();
   /* show in preview */
