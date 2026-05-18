@@ -1422,14 +1422,14 @@ const FAST_SMOOTHING_ALPHA = 0.65;
 const SLOW_SMOOTHING_ALPHA = 0.35;
 const LANDMARK_POLL_MS = 105;
 const LANDMARK_STALE_MS = 260;
-const LIPSTICK_OUTER_LANDMARKS = [61, 146, 91, 181, 84, 17, 314, 405, 321, 375, 291, 308];
-const LIPSTICK_INNER_LANDMARKS = [78, 95, 88, 178, 87, 14, 317, 402, 318, 324];
+const LIPSTICK_OUTER_LANDMARKS = [61, 185, 40, 39, 37, 0, 267, 269, 270, 409, 291, 375, 321, 405, 314, 17, 84, 181, 91, 146];
+const LIPSTICK_INNER_LANDMARKS = [78, 191, 80, 81, 82, 13, 312, 311, 310, 415, 308, 324, 318, 402, 317, 14, 87, 178, 88, 95];
 const BLUSH_LEFT_LANDMARKS = [50, 117, 118, 119, 123, 187];
 const BLUSH_RIGHT_LANDMARKS = [280, 346, 347, 348, 352, 411];
-const LIPSTICK_OPACITY = 0.28;
-const LIPSTICK_BLUR = 3;
-const BLUSH_OPACITY = 0.22;
-const BLUSH_BLUR = 18;
+const LIPSTICK_OPACITY = 0.72;
+const LIPSTICK_BLUR = 2;
+const BLUSH_OPACITY = 0.58;
+const BLUSH_BLUR = 14;
 const BLUSH_X_OFFSET = 0.045;
 const BLUSH_Y_OFFSET = 0.040;
 const BLUSH_SCALE = 1.45;
@@ -1461,15 +1461,15 @@ const FILTER_CATALOG = {
     { name: 'Model 3', src: '/assets/necklace_3.png', image: new Image() },
   ],
   lipstick: [
-    { name: 'Red', color: 'rgba(190, 24, 62, 0.58)', stroke: 'rgba(255, 210, 220, 0.28)' },
-    { name: 'Pink', color: 'rgba(236, 72, 153, 0.52)', stroke: 'rgba(255, 220, 240, 0.25)' },
-    { name: 'Nude', color: 'rgba(178, 112, 90, 0.45)', stroke: 'rgba(255, 235, 225, 0.22)' },
-    { name: 'Berry', color: 'rgba(126, 34, 98, 0.58)', stroke: 'rgba(255, 210, 240, 0.24)' },
+    { name: 'Red', color: 'rgba(190, 24, 62, 0.90)', stroke: 'rgba(255, 210, 220, 0.40)' },
+    { name: 'Pink', color: 'rgba(236, 72, 153, 0.85)', stroke: 'rgba(255, 220, 240, 0.38)' },
+    { name: 'Nude', color: 'rgba(178, 112, 90, 0.80)', stroke: 'rgba(255, 235, 225, 0.35)' },
+    { name: 'Berry', color: 'rgba(126, 34, 98, 0.90)', stroke: 'rgba(255, 210, 240, 0.38)' },
   ],
   blush: [
-    { name: 'Pink', color: 'rgba(244, 114, 182, 0.28)' },
-    { name: 'Peach', color: 'rgba(251, 146, 60, 0.26)' },
-    { name: 'Coral', color: 'rgba(248, 113, 113, 0.28)' },
+    { name: 'Pink', color: 'rgba(244, 114, 182, 0.90)' },
+    { name: 'Peach', color: 'rgba(251, 146, 60, 0.88)' },
+    { name: 'Coral', color: 'rgba(248, 113, 113, 0.90)' },
   ],
 };
 
