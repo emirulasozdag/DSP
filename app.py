@@ -1411,8 +1411,7 @@ def _estimate_base_age(image: np.ndarray) -> int:
 def _apparent_age_after(base_age: int, mode: str, years: int, strength: float) -> int:
     requested = abs(int(years))
     signed = requested if mode == "aging" else -requested
-    # Remove the artificial strength shrinkage to allow full age delta (e.g. 24 + 50 = 74)
-    return int(round(_clamp(base_age + signed, 1.0, 99.0)))
+    return int(round(_clamp(base_age + signed * (0.38 + 0.62 * strength), 1.0, 99.0)))
 
 
 def _detect_face_bbox(image: np.ndarray):
@@ -4258,7 +4257,10 @@ def api_aging_ai():
     else:
         apparent_age_before = _estimate_base_age(image)
         
-    apparent_age_after  = _apparent_age_after(apparent_age_before, mode, years, strength)
+    # Local AI explicitly avoids the classical shrinkage so target age can reach 80+
+    requested_years = abs(int(years))
+    signed_years = requested_years if mode == "aging" else -requested_years
+    apparent_age_after = int(round(_clamp(apparent_age_before + signed_years, 1.0, 99.0)))
 
     # Local Inference
     try:

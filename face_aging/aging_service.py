@@ -186,15 +186,72 @@ def _build_skin_mask(size: int = 1024) -> np.ndarray:
 
 def _build_compositing_mask(size: int = 1024) -> np.ndarray:
     """
-    Creates a larger mask that covers the face AND the hair region, 
-    ensuring AI-generated gray hair is composited over the original image.
+    Full-face + full-hair compositing mask for FFHQ canonical space.
+
+    Two-ellipse approach:
+      • Top ellipse  : wide, centred at y≈0.38 (above the nose) — gives
+                       full coverage of hair crown all the way to top edge.
+      • Bottom ramp  : a graduated, *asymmetric* feather that dissolves the
+                       chin/neck edge downward over ~20% of the canvas height
+                       so the seam is invisible after warpPerspective.
+
+    The bottom is feathered much more aggressively than the top/sides:
+    we multiply the mask row-by-row with a 1-D sigmoid ramp so the
+    bottom 25% of the canvas fades from 1.0 → 0.0 smoothly.
+    """
+    # ── 1. Primary face+hair ellipse ─────────────────────────────────────
+    mask = np.zeros((size, size), dtype=np.float32)
+    # Tall upward-shifted ellipse: covers from crown (y=0) to chin (y≈0.80)
+    centre_face = (size // 2, int(size * 0.40))
+    axes_face   = (int(size * 0.46), int(size * 0.52))
+    cv2.ellipse(mask, centre_face, axes_face, 0, 0, 360, 1.0, -1)
+
+    # Light uniform blur to soften all edges equally
+    k_light = (size // 20) | 1
+    mask = cv2.GaussianBlur(mask, (k_light, k_light), 0)
+
+    # ── 2. Asymmetric bottom feather ─────────────────────────────────────
+    # Build a 1-D vertical ramp that is 1.0 from y=0 down to y=75% of the
+    # canvas, then falls smoothly to 0.0 by y=100%.  This dissolves the
+    # bottom neck edge without touching the hair crown at all.
+    ys = np.linspace(0.0, 1.0, size, dtype=np.float32)  # 0 = top, 1 = bottom
+    fade_start = 0.72   # full opacity above this fraction
+    fade_end   = 0.96   # fully transparent below this fraction
+    ramp = np.clip((fade_end - ys) / (fade_end - fade_start), 0.0, 1.0)
+    # Apply a 1-D Gaussian smooth to the ramp so it has no kink
+    k_ramp = (size // 12) | 1
+    ramp = cv2.GaussianBlur(ramp.reshape(-1, 1), (1, k_ramp), 0).reshape(-1)
+    # Broadcast ramp across all columns
+    ramp_2d = np.tile(ramp.reshape(-1, 1), (1, size))
+    mask = mask * ramp_2d
+
+    # ── 3. Side feather (subtle) ─────────────────────────────────────────
+    # Fade the left and right edges so the warp boundary doesn't show
+    xs = np.linspace(0.0, 1.0, size, dtype=np.float32)  # 0 = left, 1 = right
+    side_fade_w = 0.04   # feather width fraction on each side
+    side_ramp = np.clip(
+        np.minimum(xs / side_fade_w, (1.0 - xs) / side_fade_w), 0.0, 1.0)
+    mask = mask * side_ramp.reshape(1, -1)
+
+    return np.clip(mask, 0.0, 1.0)
+
+
+def _build_hair_compositing_mask(size: int = 1024) -> np.ndarray:
+    """
+    Mask covering ONLY the upper hair-crown region of the FFHQ canvas.
+    Used as a fallback to force AI-generated hair pixels directly onto
+    the output, bypassing any accidental suppression by the face mask.
+
+    In FFHQ canonical space the hair crown occupies the top ~35% of the
+    image.  We paint a wide ellipse whose centre is pushed above the top
+    edge so the ellipse only exposes its bottom half inside the canvas.
     """
     mask = np.zeros((size, size), dtype=np.float32)
-    centre = (size // 2, int(size * 0.48))  # Moved up to include hair
-    axes   = (int(size * 0.42), int(size * 0.50))  # Wider & taller
+    # Centre above the canvas so we only see the bottom arc of the ellipse
+    centre = (size // 2, int(size * 0.10))
+    axes   = (int(size * 0.48), int(size * 0.42))
     cv2.ellipse(mask, centre, axes, 0, 0, 360, 1.0, -1)
-    k = (size // 5) | 1
-    mask = cv2.GaussianBlur(mask, (k, k), 0)
+    k = (size // 10) | 1
     mask = cv2.GaussianBlur(mask, (k, k), 0)
     return mask
 
@@ -390,13 +447,20 @@ class LocalAgingService:
         # Layers 8-11 (Fine): Micro-texture, pores
         fine_mult = 1.25 if delta > 15 else 1.10
         
-        # Layers 12-17 (Color/Hair): Specifically controls hair pigment/whitening
-        if delta > 30:
-            hair_mult = 2.20  # Very prominent gray/white hair for old age
-        elif delta > 15:
-            hair_mult = 1.60
+        import math
+
+        # 1. Aggressive Scaling on Color Layers (14-17)
+        # Threshold-Based Application: activates > 45, scales exponentially
+        if target_age >= 50:
+            excess = target_age - 50
+            # Exponentially scales from 2.5x at age 50 up to max 4.0x
+            hair_mult = min(4.0, 2.5 * math.exp(excess * 0.04))
+        elif target_age > 45:
+            excess = target_age - 45
+            # Linear ramp from 1.0 at age 45 to 2.5 at age 50
+            hair_mult = 1.0 + (1.5 / 5.0) * excess
         else:
-            hair_mult = 1.15
+            hair_mult = 1.0
             
         # Apply the explicit layer restrictions and amplifications
         # Layers 0-4 (Coarse): STRICTLY FROZEN (Identity, shape, pose, eye color geometry)
@@ -409,9 +473,38 @@ class LocalAgingService:
         for i in range(8, 12):
             final_latent[:, i, :] += direction[:, i, :] * fine_mult
             
-        # Layers 12-17 (Hair/Pigment): Scaled up heavily for hair whitening
+        # Layers 12-13 (Some color/texture): Moderate scale
+        for i in range(12, 14):
+            final_latent[:, i, :] += direction[:, i, :] * (1.2 if delta > 15 else 1.0)
+            
+        # Layers 12-17 (Hair Pigmentation/Color): Aggressive whitening
+        # NOTE: We do NOT pull toward latent_avg — the FFHQ population mean
+        # skews toward dark hair, so that would bias the result darker.
+        # Instead we amplify the model's own aging direction (which genuinely
+        # encodes gray/white pigment loss) and add an explicit positive
+        # lightness offset derived from how far the direction already moves.
         for i in range(12, 18):
-            final_latent[:, i, :] += direction[:, i, :] * hair_mult
+            # Pick the right multiplier: layers 12-13 get moderate scale,
+            # layers 14-17 (primary pigment layers) get the full hair_mult
+            layer_mult = hair_mult if i >= 14 else (1.2 if delta > 15 else 1.0)
+            final_latent[:, i, :] += direction[:, i, :] * layer_mult
+
+            # Lightness bias for ages > 45 on all hair/color layers
+            if target_age > 45:
+                # Scale: 0.0 at age 45, ramps to max 1.5 at age 80+
+                lightness_strength = min(1.5, (target_age - 45) * 0.05)
+
+                # The aging direction at these layers already encodes
+                # the shift from current pigment → older pigment.
+                # Amplify *only its positive components* (lightness-increasing
+                # dimensions) to push hair lighter without darkening anything.
+                dir_layer = direction[:, i, :]
+                positive_dir = torch.clamp(dir_layer, min=0.0)
+                norm = positive_dir.norm(dim=-1, keepdim=True).clamp(min=1e-6)
+                positive_unit = positive_dir / norm
+
+                # Inject a scaled positive-lightness nudge into the latent
+                final_latent[:, i, :] += positive_unit * lightness_strength
 
         # 4. SAM Generator Inference ──────────────────────────────────────
         with torch.no_grad():
@@ -423,20 +516,42 @@ class LocalAgingService:
         # aged_face_1024: 1024×1024 BGR (SAM upscales internally 256→1024)
         aged_face_1024 = self._postprocess(output_tensor)
 
-        # 5. Soft face blend mask (for compositing onto original photo) ───
-        face_mask_1024    = _build_compositing_mask(size=1024)
-        face_mask_1024_3ch = np.stack([face_mask_1024] * 3, axis=-1)
-
-        # 4. Skin-tone correction ─────────────────────────────────────────
-        # Resize original aligned face to 1024 for reference
+        # ── LANCZOS ref for skin-tone correction ────────────────────────
         LANCZOS = getattr(PIL.Image, 'Resampling', PIL.Image).LANCZOS
         aligned_1024 = np.array(aligned_pil.resize((1024, 1024), LANCZOS))
         aligned_1024_bgr = cv2.cvtColor(aligned_1024, cv2.COLOR_RGB2BGR)
 
+        # 5. Skin-tone correction (face region only, excludes hair) ──────
+        # skin_mask covers the cheeks/forehead but NOT the hair crown, so
+        # the LAB colour-transfer does not undo the AI's gray/white hair.
         skin_mask_1024 = _build_skin_mask(size=1024)
-        aged_face_1024 = self._skin_tone_correction(aligned_1024_bgr, aged_face_1024, skin_mask_1024)
+        aged_face_corrected = self._skin_tone_correction(
+            aligned_1024_bgr, aged_face_1024, skin_mask_1024)
 
-        # 6. Inverse perspective transform: unwarp → original image space ─
+        # 6. Fallback: explicitly paste AI hair pixels over the corrected face
+        # This is the critical step: even if the compositing mask later
+        # attenuates the hair region, the AI hair is already baked into
+        # aged_face_corrected before we unwarp.
+        if target_age > 45:
+            hair_mask_1024 = _build_hair_compositing_mask(size=1024)
+            # Strength scales from 0.6 at age 46 → 1.0 at age 70+
+            hair_strength = min(1.0, 0.6 + (target_age - 45) * 0.016)
+            hair_mask_3ch = np.stack([hair_mask_1024 * hair_strength] * 3, axis=-1)
+            aged_face_corrected = (
+                aged_face_1024.astype(np.float32) * hair_mask_3ch
+                + aged_face_corrected.astype(np.float32) * (1.0 - hair_mask_3ch)
+            )
+            aged_face_corrected = np.clip(aged_face_corrected, 0, 255).astype(np.uint8)
+            print(f"[AgingService] Hair override applied: strength={hair_strength:.2f}",
+                  flush=True)
+
+        # 7. Full face+hair compositing mask ─────────────────────────────
+        # New mask reaches the very top of the FFHQ canvas so hair is
+        # never excluded from the final composite.
+        face_mask_1024    = _build_compositing_mask(size=1024)
+        face_mask_1024_3ch = np.stack([face_mask_1024] * 3, axis=-1)
+
+        # 8. Inverse perspective transform: unwarp → original image space ─
         dst_pts  = np.array([[0, 0], [0, 1024], [1024, 1024], [1024, 0]],
                             dtype=np.float32)
         quad_pts = np.array(original_quad, dtype=np.float32)
@@ -444,7 +559,7 @@ class LocalAgingService:
 
         h, w = image.shape[:2]
         unwarped_face = cv2.warpPerspective(
-            aged_face_1024, M, (w, h),
+            aged_face_corrected, M, (w, h),
             flags=cv2.INTER_LINEAR,
             borderMode=cv2.BORDER_CONSTANT, borderValue=(0, 0, 0))
         unwarped_mask = cv2.warpPerspective(
@@ -452,16 +567,14 @@ class LocalAgingService:
             flags=cv2.INTER_LINEAR,
             borderMode=cv2.BORDER_CONSTANT, borderValue=(0, 0, 0))
 
-        # 7. Alpha composite aged face over original background ───────────
+        # 9. Alpha composite aged face over original background ───────────
         orig_f  = image.astype(np.float32)
         aged_f  = unwarped_face.astype(np.float32)
         blended = orig_f * (1.0 - unwarped_mask) + aged_f * unwarped_mask
         blended = np.clip(blended, 0, 255).astype(np.uint8)
 
-        # 8. ── EYE COLOUR PROTECTION ──────────────────────────────────────
-        # Build a soft mask around both eye regions using MediaPipe landmarks.
-        # Composite the *original* eye pixels back over the blended result.
-        # This guarantees eye colour is never changed by the AI.
+        # 10. ── EYE COLOUR PROTECTION ────────────────────────────────────
+        # Composite the *original* eye pixels back to preserve iris colour.
         eye_mask = build_eye_protection_mask(lm, h, w, padding_ratio=0.40)
         eye_mask_3ch = np.stack([eye_mask] * 3, axis=-1)
 
