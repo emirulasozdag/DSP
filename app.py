@@ -1411,7 +1411,8 @@ def _estimate_base_age(image: np.ndarray) -> int:
 def _apparent_age_after(base_age: int, mode: str, years: int, strength: float) -> int:
     requested = abs(int(years))
     signed = requested if mode == "aging" else -requested
-    return int(round(_clamp(base_age + signed * (0.38 + 0.62 * strength), 1.0, 99.0)))
+    # Remove the artificial strength shrinkage to allow full age delta (e.g. 24 + 50 = 74)
+    return int(round(_clamp(base_age + signed, 1.0, 99.0)))
 
 
 def _detect_face_bbox(image: np.ndarray):
@@ -4244,19 +4245,28 @@ def api_aging_ai():
     try:
         strength = _clamp(float(request.form.get("strength", 0.5)), 0.0, 1.0)
         mode     = (request.form.get("mode", "aging") or "aging").strip().lower()
-        years    = max(-50, min(50, int(float(request.form.get("years", 10)))))
+        years    = max(-80, min(80, int(float(request.form.get("years", 10)))))
     except ValueError:
         return _error("Invalid aging parameters.", 400)
 
     if mode not in {"aging", "deaging"}:
         return _error("Invalid mode. Use 'aging' or 'deaging'.", 400)
 
-    apparent_age_before = _estimate_base_age(image)
+    req_base_age = request.form.get("baseAge") or request.form.get("current_age")
+    if req_base_age:
+        apparent_age_before = int(float(req_base_age))
+    else:
+        apparent_age_before = _estimate_base_age(image)
+        
     apparent_age_after  = _apparent_age_after(apparent_age_before, mode, years, strength)
 
     # Local Inference
     try:
-        out = local_aging_service.run_inference(image, target_age=apparent_age_after)
+        out = local_aging_service.run_inference(
+            image,
+            target_age=apparent_age_after,
+            current_age=apparent_age_before,
+        )
     except Exception as exc:
         print(f"[api_aging_ai] Inference error: {exc}", flush=True)
         return jsonify({"ok": False, "error": str(exc)}), 500
