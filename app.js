@@ -279,11 +279,22 @@ function delaunayTriangles(nodes) {
     });
 }
 
+function isMediaPipe468Mode() {
+  const activeSchema = $('#segSchema .seg-btn.active')?.dataset.val;
+  return activeSchema === '468';
+}
+
 function renderLandmarkMesh(nodes) {
   const meshG = $('#meshG');
   if (!meshG) return;
 
   meshG.innerHTML = '';
+
+  if (isMediaPipe468Mode()) {
+    meshG.style.opacity = '0';
+    return;
+  }
+
   if (!Array.isArray(nodes) || nodes.length < 3) return;
 
   const triangles = delaunayTriangles(nodes);
@@ -318,8 +329,10 @@ function updateLandmarkLabels(mx, my) {
 
 function applyLandmarksToSvg(points68, meshPoints = points68) {
   const svg = $('#lmSvg');
-  const circles = Array.from($$('#ptsG circle'));
-  if (!svg || circles.length === 0) return;
+  const ptsG = $('#ptsG');
+  const connG = $('#connG');
+  const meshG = $('#meshG');
+  if (!svg || !ptsG) return;
 
   const lmCanvas = document.querySelector('.lm-canvas');
   const bgImg = document.querySelector('#lmBgImg');
@@ -333,7 +346,40 @@ function applyLandmarksToSvg(points68, meshPoints = points68) {
   svg.setAttribute('height', String(displayedImageHeight));
   svg.setAttribute('viewBox', `0 0 ${displayedImageWidth} ${displayedImageHeight}`);
 
-  const sampled = sampleLandmarks(points68, circles.length);
+  const isMP468 = isMediaPipe468Mode();
+  
+  // For MP468: rebuild #ptsG with 468 circles from rawLandmarks
+  // For 68-pt: use existing 68 circles or rebuild if mismatch
+  let circles;
+  if (isMP468) {
+    ptsG.innerHTML = '';
+    circles = [];
+    points68.forEach((_, idx) => {
+      const circle = document.createElementNS('http://www.w3.org/2000/svg', 'circle');
+      circle.setAttribute('r', '3');
+      circle.setAttribute('fill', 'rgba(139,92,246,0.6)');
+      circle.setAttribute('data-idx', String(idx));
+      ptsG.appendChild(circle);
+      circles.push(circle);
+    });
+  } else {
+    circles = Array.from($$('#ptsG circle'));
+    // If switching back from MP468 (circle count mismatch), rebuild 68 circles
+    if (circles.length !== 68) {
+      ptsG.innerHTML = '';
+      circles = [];
+      for (let idx = 0; idx < 68; idx++) {
+        const circle = document.createElementNS('http://www.w3.org/2000/svg', 'circle');
+        circle.setAttribute('r', '3');
+        circle.setAttribute('fill', 'rgba(139,92,246,0.6)');
+        circle.setAttribute('data-idx', String(idx));
+        ptsG.appendChild(circle);
+        circles.push(circle);
+      }
+    }
+  }
+
+  const sampled = isMP468 ? points68 : sampleLandmarks(points68, circles.length);
   backendState.landmarks = sampled;
 
   // Compute screen-space mapped coordinates from image-space landmarks.
@@ -354,6 +400,16 @@ function applyLandmarksToSvg(points68, meshPoints = points68) {
   });
 
   updateLandmarkLabels(mx, my);
+
+  // For MP468: hide connections and skip mesh
+  if (isMP468) {
+    if (connG) connG.style.display = 'none';
+    if (meshG) meshG.innerHTML = '';
+    return;
+  }
+
+  // Show connections for 68-pt mode
+  if (connG) connG.style.display = '';
 
   const meshNodes = [];
   (Array.isArray(meshPoints) ? meshPoints : []).forEach(p => {
@@ -412,7 +468,13 @@ function applyLandmarkStatsUI(data) {
   const n = data.pointCount;
   const conf = Number(data.confidence || 85);
   const ms = Math.round(data.durationMs);
-  const backendLabel = mapLandmarkMethodLabel(data.method, conf);
+  let backendLabel = mapLandmarkMethodLabel(data.method, conf);
+  const isMP468 = isMediaPipe468Mode();
+
+  // Override backend label to "MediaPipe" when MP468 schema is selected
+  if (isMP468) {
+    backendLabel = 'MediaPipe';
+  }
 
   if ($('#lmPtsCount')) $('#lmPtsCount').textContent = n;
   if ($('#lmLatencyVal')) $('#lmLatencyVal').textContent = ms + 'ms';
@@ -423,9 +485,75 @@ function applyLandmarkStatsUI(data) {
   if ($('#lmStatBackend')) $('#lmStatBackend').textContent = backendLabel;
   if ($('#lmStatusText')) $('#lmStatusText').textContent = `Detection complete · ${n}/${n} pts`;
 
+  // Update toolbar landmark count label based on active schema
+  const toolbarLabel = document.querySelector('.lm-toolbar-right span');
+  if (toolbarLabel) {
+    toolbarLabel.textContent = isMP468 ? '468 pts' : '68 pts';
+  }
+
   const circ = 251.3;
   const fillLen = ((circ * conf) / 100).toFixed(1);
   if ($('#lmAccRing')) $('#lmAccRing').setAttribute('stroke-dasharray', `${fillLen} ${circ}`);
+
+  // Update region breakdown visibility for MP468 mode
+  const regionGrid = document.querySelector('.legend-grid');
+  if (regionGrid) {
+    const regionRows = regionGrid.querySelectorAll('.lg-row:not(.lg-total)');
+    regionRows.forEach(row => {
+      row.style.display = isMP468 ? 'none' : '';
+    });
+    // Update total label for MP468
+    const totalRow = regionGrid.querySelector('.lg-row.lg-total');
+    if (totalRow && isMP468) {
+      const label = totalRow.querySelector('.lg-row-top span:first-child');
+      const value = totalRow.querySelector('.lg-row-top strong');
+      if (label) label.textContent = 'MP468 landmarks shown without mesh';
+      if (value) value.textContent = '468';
+    }
+    
+    // Update Region Breakdown badge with landmark schema
+    const cardHead = regionGrid.closest('.card')?.querySelector('.card-head');
+    if (cardHead) {
+      const badge = cardHead.querySelector('.tag');
+      if (badge) {
+        badge.textContent = isMP468 ? 'MP468' : '68 pts';
+      }
+    }
+  }
+
+  // Update mesh toggle state for MP468 mode
+  const tgMesh = $('#tgMesh');
+  if (isMP468) {
+    // Disable mesh toggle for MP468
+    if (tgMesh) {
+      tgMesh.disabled = true;
+      tgMesh.checked = false;
+      tgMesh.title = 'MP468 mesh disabled for safety';
+    }
+  } else {
+    // Re-enable mesh toggle for 68-pt mode
+    if (tgMesh) {
+      tgMesh.disabled = false;
+      tgMesh.title = '';
+    }
+  }
+
+  // Synchronize Detection Model UI buttons with actual landmark source
+  const segModel = $('#segModel');
+  if (segModel) {
+    const modelBtns = segModel.querySelectorAll('.seg-btn');
+    modelBtns.forEach(btn => btn.classList.remove('active'));
+    
+    if (isMP468) {
+      // Activate MediaPipe button
+      const mpBtn = segModel.querySelector('.seg-btn[data-val="mediapipe"]');
+      if (mpBtn) mpBtn.classList.add('active');
+    } else {
+      // Activate dlib button
+      const dlibBtn = segModel.querySelector('.seg-btn[data-val="dlib"]');
+      if (dlibBtn) dlibBtn.classList.add('active');
+    }
+  }
 }
 
 async function fetchLandmarksFromBackend(force = false) {
@@ -452,9 +580,10 @@ async function fetchLandmarksFromBackend(force = false) {
     const data = await res.json();
     if (!res.ok || !data.ok) throw new Error(data.error || 'Landmark detection failed.');
 
-    const points68Source = (Array.isArray(data.reduced68) && data.reduced68.length)
-      ? data.reduced68
-      : data.landmarks;
+    const isMP468 = isMediaPipe468Mode();
+    const points68Source = isMP468
+      ? (Array.isArray(data.rawLandmarks) && data.rawLandmarks.length ? data.rawLandmarks : data.landmarks)
+      : (Array.isArray(data.reduced68) && data.reduced68.length ? data.reduced68 : data.landmarks);
     const meshPointsSource = (Array.isArray(data.rawLandmarks) && data.rawLandmarks.length)
       ? data.rawLandmarks
       : points68Source;
@@ -822,22 +951,21 @@ function syncAgingPhotoPanels() {
   if (beforeUrl) {
     beforeImg.src = beforeUrl;
     beforeImg.style.display = 'block';
-    if (afterUrl) {
-      afterImg.src = afterUrl;
-      afterImg.style.display = 'block';
-    } else {
-      afterImg.src = '';
-      afterImg.style.display = 'none';
-    }
-    // Real photos should not carry the placeholder wireframe; it cannot align to arbitrary crops.
-    $$('#page-aging .aging-face-wrap .face-svg').forEach(s => {
-      s.style.display = 'none';
-    });
   } else {
     beforeImg.style.display = 'none';
-    afterImg.style.display = 'none';
-    $$('#page-aging .aging-face-wrap .face-svg').forEach(s => { s.style.display = ''; s.style.opacity = ''; s.style.zIndex = ''; });
   }
+
+  if (afterUrl) {
+    afterImg.src = afterUrl;
+    afterImg.style.display = 'block';
+  } else {
+    afterImg.src = '';
+    afterImg.style.display = 'none';
+  }
+
+  // Toggle the has-real-image class based on whether URLs exist
+  beforeWrap.classList.toggle('has-real-image', Boolean(beforeUrl));
+  afterWrap.classList.toggle('has-real-image', Boolean(afterUrl));
 }
 
 /* ── Landmark page: show uploaded photo as semi-transparent canvas background ── */
@@ -872,6 +1000,19 @@ function syncLandmarkPhotoBg() {
   const has = Boolean(appState.imageDataUrl);
   img.src = has ? appState.imageDataUrl : '';
   img.style.display = has ? 'block' : 'none';
+
+  // Hide placeholder SVG/wireframe only AFTER real image is loaded
+  // Keep demo/idle visualization visible when no image
+  const placeholderSvgs = lmCanvas.querySelectorAll('.face-svg, .placeholder-svg, .demo-face, svg:not(#lmSvg)');
+  placeholderSvgs.forEach(el => {
+    if (el.id !== 'lmSvg') {
+      el.style.display = has ? 'none' : '';
+    }
+  });
+
+  // Ensure active landmark overlay SVG stays visible
+  const activeSvg = lmCanvas.querySelector('#lmSvg');
+  if (activeSvg) activeSvg.style.display = '';
 
   // Match canvas aspect ratio to the photo so it scales proportionally to the
   // available column width instead of being stretched flat by object-fit:fill.
@@ -1118,6 +1259,35 @@ if ($('#btnRunLM')) {
     btn.addEventListener('click', () => {
       grp.querySelectorAll('.seg-btn').forEach(b => b.classList.remove('active'));
       btn.classList.add('active');
+      // When schema changes, update UI and re-render landmarks
+      if (sel === '#segSchema' && backendState.lastLmData) {
+        const data = backendState.lastLmData;
+        const isMP468 = isMediaPipe468Mode();
+        
+        // Select point source based on schema
+        const points68Source = isMP468 
+          ? (Array.isArray(data.rawLandmarks) && data.rawLandmarks.length ? data.rawLandmarks : data.landmarks)
+          : (Array.isArray(data.reduced68) && data.reduced68.length ? data.reduced68 : data.landmarks);
+        const meshPointsSource = (Array.isArray(data.rawLandmarks) && data.rawLandmarks.length)
+          ? data.rawLandmarks
+          : points68Source;
+
+        const points68 = (points68Source || []).map(p => ({
+          x: p.x,
+          y: p.y,
+          imageWidth: data.width,
+          imageHeight: data.height,
+        }));
+        const meshPoints = (meshPointsSource || []).map(p => ({
+          x: p.x,
+          y: p.y,
+          imageWidth: data.width,
+          imageHeight: data.height,
+        }));
+
+        applyLandmarksToSvg(points68, meshPoints);
+        applyLandmarkStatsUI(data);
+      }
     });
   });
 });
@@ -2801,20 +2971,26 @@ if ($('#btnSimulate')) $('#btnSimulate').addEventListener('click', async functio
     backendState.analysisData = null;
     syncAgingPhotoPanels();
 
-    // ── Update apparent age from backend estimate ──
-    if (data.apparentAgeBefore != null) {
-      const elOrig = $('#ageOriginal');
-      if (elOrig) elOrig.textContent = data.apparentAgeBefore;
+    // ── Update apparent age: preserve displayed base age, recalculate with current slider ──
+    const displayedBaseAge = parseInt($('#ageOriginal')?.textContent || '24');
+    const sliderYears = Number($('#sTargetAge')?.value || 0);
+    const recalcSimulated = Math.max(1, displayedBaseAge + sliderYears);
+    
+    const elOrig = $('#ageOriginal');
+    if (elOrig) elOrig.textContent = displayedBaseAge;
+    
+    const elSim = $('#ageTransformed');
+    if (elSim) elSim.textContent = recalcSimulated;
+    
+    const elOffset = $('#ageOffsetLabel');
+    if (elOffset) {
+      if (sliderYears === 0) elOffset.textContent = '0 Years';
+      else if (sliderYears > 0) elOffset.textContent = `+${sliderYears} Years`;
+      else elOffset.textContent = `${sliderYears} Years`;
     }
-    if (data.apparentAgeAfter != null) {
-      const elSim = $('#ageTransformed');
-      if (elSim) elSim.textContent = data.apparentAgeAfter;
-      const diff = (data.apparentAgeAfter || 0) - (data.apparentAgeBefore || 28);
-      const elOffset = $('#ageOffsetLabel');
-      if (elOffset) elOffset.textContent = diff >= 0 ? `+${diff} Years` : `${diff} Years`;
-    }
+    
     // ── Update method compare thumbnails ──
-    if (data.variants) _applyAgingVariantThumbs(data.variants, data.apparentAgeBefore, data.apparentAgeAfter);
+    if (data.variants) _applyAgingVariantThumbs(data.variants, displayedBaseAge, recalcSimulated);
 
     toast(`Aging simulation applied (${data.durationMs || 0} ms).`, 'success');
     fetchAnalysisFromBackend(true);

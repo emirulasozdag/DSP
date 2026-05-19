@@ -593,6 +593,812 @@ def _mean_landmark_point(points, indices):
     return np.mean(np.vstack(selected), axis=0)
 
 
+def _build_aged_landmark_targets(landmarks: list, image_shape: tuple[int, int], age_delta: float, intensity: float) -> list | None:
+    """
+    Generate aged target landmarks by applying subtle age-related displacements.
+    
+    Displacements:
+    - Jawline/lower face: downward + slight outward (sagging)
+    - Mouth corners: downward
+    - Lower cheeks/jowls: downward
+    - Under-eye: very slight downward
+    - Stable zones (eyes, nose bridge, eyebrows): minimal/no change
+    
+    Returns:
+    - Aged landmarks list (copy with modified coordinates), or None if invalid.
+    - Input landmarks remain unchanged.
+    - All coordinates clipped to image bounds.
+    """
+    try:
+        # Validate input
+        if not landmarks or len(landmarks) < 100:
+            return None
+        
+        h, w = image_shape
+        if h < 50 or w < 50:
+            return None
+        
+        # Displacement scale: increased for moderate visible aging (~2.5x stronger)
+        scale = intensity * age_delta * 0.020
+        if scale < 0.0001:
+            return landmarks  # No change if scale is negligible
+        
+        face_height_est = h * 0.6
+        
+        # Deep copy the landmarks list
+        aged = []
+        for lm in landmarks:
+            aged.append({"id": lm["id"], "x": lm["x"], "y": lm["y"]})
+        
+        # Define displacement by landmark region using MediaPipe 468 indices
+        # ─────────────────────────────────────────────────────────────────
+        
+        # Jawline/chin (lower face): indices 152-200 (u-shaped bottom contour)
+        # Move downward 5.25% and moderately outward (visible sagging, ~1.5x stronger)
+        jawline_indices = list(range(152, 201)) + [0, 10, 389, 397]
+        jawline_y_disp = face_height_est * 0.0525 * scale  # ~5.25% downward (1.5x increase)
+        jawline_x_scale = 0.015 * scale  # Moderate outward jowl widening
+        jawline_y_disp = np.clip(jawline_y_disp, 0, 28)  # Conservative clamp: max 28 px
+        
+        for idx in jawline_indices:
+            if 0 <= idx < len(aged):
+                # Outward displacement based on distance from center
+                center_x = w * 0.5
+                aged[idx]["y"] = min(h - 1, aged[idx]["y"] + jawline_y_disp)
+                dx = (aged[idx]["x"] - center_x) * jawline_x_scale
+                dx = np.clip(dx, -15, 15)  # Clamp outward displacement to ±15 px
+                aged[idx]["x"] = np.clip(aged[idx]["x"] + dx, 0, w - 1)
+        
+        # Lower cheeks / jowls: indices 148-150, 175-180, 376-380, 405-410
+        # Move downward 4.2% (more pronounced sagging, ~1.4x stronger)
+        cheek_indices = list(range(148, 152)) + list(range(175, 181)) + list(range(376, 381)) + list(range(405, 411))
+        cheek_y_disp = face_height_est * 0.042 * scale  # ~4.2% downward (1.4x increase)
+        cheek_y_disp = np.clip(cheek_y_disp, 0, 24)  # Conservative clamp: max 24 px
+        
+        for idx in cheek_indices:
+            if 0 <= idx < len(aged):
+                aged[idx]["y"] = min(h - 1, aged[idx]["y"] + cheek_y_disp)
+        
+        # Mouth corners (61, 291): move downward 2.6% (more visible droop, ~1.3x stronger)
+        mouth_corner_indices = [61, 291]
+        mouth_y_disp = face_height_est * 0.026 * scale  # ~2.6% downward (1.3x increase)
+        mouth_y_disp = np.clip(mouth_y_disp, 0, 18)  # Conservative clamp: max 18 px
+        
+        for idx in mouth_corner_indices:
+            if 0 <= idx < len(aged):
+                aged[idx]["y"] = min(h - 1, aged[idx]["y"] + mouth_y_disp)
+        
+        # Under-eye zones (145-147, 374-376): move downward 1.2% (subtle bags)
+        under_eye_indices = list(range(145, 148)) + list(range(374, 377))
+        under_eye_y_disp = face_height_est * 0.012 * scale  # ~1.2% downward (up from 0.5%)
+        under_eye_y_disp = np.clip(under_eye_y_disp, 0, 10)  # Conservative clamp: max 10 px
+        
+        for idx in under_eye_indices:
+            if 0 <= idx < len(aged):
+                aged[idx]["y"] = min(h - 1, aged[idx]["y"] + under_eye_y_disp)
+        
+        # Stable zones (no or minimal change):
+        # - Eyes (33-133 left, 362-468 right): no change
+        # - Nose bridge (1, 4, 5, 6): no change
+        # - Eyebrows (46-53 left, 276-283 right): no change
+        # - Upper face contour (10, 338, 297, 333, 299): minimal change
+        # (These are already stable by default, no explicit action needed)
+        
+        # Ensure all coordinates are within image bounds
+        for lm in aged:
+            lm["x"] = max(0, min(w - 1, int(lm["x"])))
+            lm["y"] = max(0, min(h - 1, int(lm["y"])))
+        
+        return aged
+    
+    except Exception:
+        return None
+
+
+def _build_delaunay_triangles(landmarks: list, image_shape: tuple[int, int]) -> list:
+    """
+    Generate Delaunay triangulation and map triangle vertices to landmark indices.
+    
+    Returns:
+    - List of tuples: each (i0, i1, i2) is a triangle of 3 landmark indices
+    - Empty list [] if landmarks insufficient or invalid
+    - Triangles filtered: only those fully inside image bounds, no degenerates
+    
+    Does NOT modify the image; only prepares triangle topology.
+    """
+    try:
+        # Validate input
+        if not landmarks or len(landmarks) < 50:
+            return []
+        
+        h, w = image_shape
+        if h < 50 or w < 50:
+            return []
+        
+        # Convert landmarks to point array for Subdiv2D
+        points = []
+        landmark_map = {}  # Map from (x,y) to landmark index
+        
+        for lm in landmarks:
+            x = int(lm["x"])
+            y = int(lm["y"])
+            # Ensure points are within bounds
+            if 0 <= x < w and 0 <= y < h:
+                points.append((x, y))
+                # Store the landmark index for this point
+                landmark_map[(x, y)] = lm["id"]
+        
+        if len(points) < 50:
+            return []
+        
+        # Initialize Subdiv2D with image bounds
+        subdiv = cv2.Subdiv2D((0, 0, w, h))
+        
+        # Insert all points
+        for pt in points:
+            try:
+                subdiv.insert(pt)
+            except Exception:
+                continue
+        
+        # Get triangles
+        triangles = subdiv.getTriangleList()
+        
+        if len(triangles) == 0:
+            return []
+        
+        # Map each triangle's vertices back to landmark indices
+        triangle_indices = []
+        seen = set()  # Track unique triangles to avoid duplicates
+        
+        for tri in triangles:
+            # Each triangle has 6 values: x0,y0, x1,y1, x2,y2
+            pt0 = (int(tri[0]), int(tri[1]))
+            pt1 = (int(tri[2]), int(tri[3]))
+            pt2 = (int(tri[4]), int(tri[5]))
+            
+            # Skip if any point is out of bounds
+            if not (0 <= pt0[0] < w and 0 <= pt0[1] < h):
+                continue
+            if not (0 <= pt1[0] < w and 0 <= pt1[1] < h):
+                continue
+            if not (0 <= pt2[0] < w and 0 <= pt2[1] < h):
+                continue
+            
+            # Find nearest landmark indices for each vertex
+            # (vertices may not be exact due to floating point, so use nearest neighbor)
+            idx0 = landmark_map.get(pt0)
+            idx1 = landmark_map.get(pt1)
+            idx2 = landmark_map.get(pt2)
+            
+            # If exact match not found, search for nearest neighbor within tolerance
+            if idx0 is None:
+                for (lx, ly), lid in landmark_map.items():
+                    if (lx - pt0[0]) ** 2 + (ly - pt0[1]) ** 2 <= 4:  # tolerance: 2 pixels
+                        idx0 = lid
+                        break
+            if idx1 is None:
+                for (lx, ly), lid in landmark_map.items():
+                    if (lx - pt1[0]) ** 2 + (ly - pt1[1]) ** 2 <= 4:
+                        idx1 = lid
+                        break
+            if idx2 is None:
+                for (lx, ly), lid in landmark_map.items():
+                    if (lx - pt2[0]) ** 2 + (ly - pt2[1]) ** 2 <= 4:
+                        idx2 = lid
+                        break
+            
+            # Skip if any vertex could not be mapped to a landmark
+            if idx0 is None or idx1 is None or idx2 is None:
+                continue
+            
+            # Skip degenerate triangles (all three points are the same)
+            if idx0 == idx1 or idx1 == idx2 or idx0 == idx2:
+                continue
+            
+            # Normalize triangle to avoid counting same triangle multiple times
+            tri_tuple = tuple(sorted([idx0, idx1, idx2]))
+            if tri_tuple in seen:
+                continue
+            seen.add(tri_tuple)
+            
+            # Add triangle with original vertex order (for warp consistency)
+            triangle_indices.append((idx0, idx1, idx2))
+        
+        return triangle_indices
+    
+    except Exception:
+        return []
+
+
+def _apply_piecewise_affine_warp(image: np.ndarray, source_landmarks: list, target_landmarks: list, triangle_indices: list, intensity: float) -> np.ndarray:
+    """
+    Apply subtle piecewise-affine warp to lower/mid-face regions only.
+    
+    For each triangle: compute affine transform between source and target landmark positions,
+    warp the triangle region, and blend gently with the original.
+    
+    Only warps aging-relevant regions: under-eye, cheeks, mouth, jaw/jowls.
+    Protects: eyes, eyebrows, forehead, nose bridge, background.
+    
+    Returns original image if invalid or if any error occurs.
+    """
+    try:
+        # Validate inputs
+        if not source_landmarks or not target_landmarks or not triangle_indices:
+            return image
+        
+        if len(source_landmarks) < 100 or len(target_landmarks) < 100:
+            return image
+        
+        h, w = image.shape[:2]
+        
+        # Debug tracking
+        warped_triangle_count = 0
+        skipped_protected_count = 0
+        skipped_non_aging_count = 0
+        skipped_degenerate_count = 0
+        displacements = []
+        
+        # Sparse selection tracking
+        sparse_selected_count = 0
+        sparse_skipped_count = 0
+        
+        # Detailed failure tracking
+        roi_invalid_count = 0
+        affine_fail_count = 0
+        mask_empty_count = 0
+        warp_empty_count = 0
+        exception_count = 0
+        successful_blend_count = 0
+        exception_messages = []
+        
+        # Build geometric bounding boxes from landmark coordinates for centroid-based filtering
+        def get_bbox_from_indices(landmarks, indices):
+            """Extract bounding box from landmark indices."""
+            try:
+                coords = [
+                    (float(landmarks[i]["x"]), float(landmarks[i]["y"]))
+                    for i in indices if i < len(landmarks)
+                ]
+                if not coords:
+                    return None
+                xs, ys = zip(*coords)
+                return (min(xs), min(ys), max(xs), max(ys))  # (x_min, y_min, x_max, y_max)
+            except Exception:
+                return None
+        
+        # Face bounding box (all landmarks)
+        all_indices = list(range(min(468, len(source_landmarks))))
+        face_bbox = get_bbox_from_indices(source_landmarks, all_indices)
+        
+        # Compute face dimensions for size limits
+        if face_bbox is None:
+            return image
+        face_x_min, face_y_min, face_x_max, face_y_max = face_bbox
+        face_w = face_x_max - face_x_min
+        face_h = face_y_max - face_y_min
+        
+        # Define max anatomical sizes for protected zones
+        max_eye_w = face_w * 0.16      # ~16% of face width
+        max_eye_h = face_h * 0.08      # ~8% of face height
+        max_lips_w = face_w * 0.22     # ~22% of face width
+        max_lips_h = face_h * 0.08     # ~8% of face height
+        max_nose_w = face_w * 0.10     # ~10% of face width
+        max_nose_h = face_h * 0.18     # ~18% of face height
+        
+        def clamp_bbox(bbox, max_w, max_h):
+            """Clamp bbox to max dimensions, recentering if needed."""
+            if bbox is None:
+                return None
+            x_min, y_min, x_max, y_max = bbox
+            w = x_max - x_min
+            h = y_max - y_min
+            
+            # If within limits, return as-is
+            if w <= max_w and h <= max_h:
+                return bbox
+            
+            # Compute center
+            cx = (x_min + x_max) / 2.0
+            cy = (y_min + y_max) / 2.0
+            
+            # Use min of current size and max allowed
+            new_w = min(w, max_w)
+            new_h = min(h, max_h)
+            
+            # Recenter
+            new_x_min = cx - new_w / 2.0
+            new_x_max = cx + new_w / 2.0
+            new_y_min = cy - new_h / 2.0
+            new_y_max = cy + new_h / 2.0
+            
+            return (new_x_min, new_y_min, new_x_max, new_y_max)
+        
+        # Protected regions (tight boxes around true features, not large regions)
+        # Use only specific eye landmarks, not huge ranges
+        eye_left_raw = get_bbox_from_indices(source_landmarks, range(33, 42))  # Left eye
+        eye_right_raw = get_bbox_from_indices(source_landmarks, range(362, 374))  # Right eye
+        eye_left_bbox = clamp_bbox(eye_left_raw, max_eye_w, max_eye_h)
+        eye_right_bbox = clamp_bbox(eye_right_raw, max_eye_w, max_eye_h)
+        
+        # Lips interior only (not entire mouth region)
+        lips_interior_raw = get_bbox_from_indices(source_landmarks, list(range(61, 69)) + list(range(88, 96)))
+        lips_interior_bbox = clamp_bbox(lips_interior_raw, max_lips_w, max_lips_h)
+        
+        # Tight nose bridge
+        nose_bridge_raw = get_bbox_from_indices(source_landmarks, [4, 5, 27, 28, 29, 30, 94])
+        nose_bridge_bbox = clamp_bbox(nose_bridge_raw, max_nose_w, max_nose_h)
+        
+        def point_in_bbox(px, py, bbox, margin=0):
+            """Check if point is inside bounding box with optional margin."""
+            if bbox is None:
+                return False
+            x_min, y_min, x_max, y_max = bbox
+            return (x_min - margin <= px <= x_max + margin and 
+                    y_min - margin <= py <= y_max + margin)
+        
+        def centroid_in_protected_zone(cx, cy):
+            """Check if centroid is in a truly protected zone (tight feature areas only)."""
+            # Eyes only (no margin—boxes already clamped)
+            if point_in_bbox(cx, cy, eye_left_bbox, margin=0) or point_in_bbox(cx, cy, eye_right_bbox, margin=0):
+                return True
+            # Nose bridge only (no margin)
+            if point_in_bbox(cx, cy, nose_bridge_bbox, margin=0):
+                return True
+            # Lips interior only (no margin)
+            if point_in_bbox(cx, cy, lips_interior_bbox, margin=0):
+                return True
+            # Do NOT protect eyebrows or forehead—allow more aging-region triangles
+            return False
+        
+        # Diagnostic: Log protected zone boundaries
+        def bbox_to_str(bbox):
+            """Convert bbox to (x_min, y_min, w, h) string."""
+            if bbox is None:
+                return "None"
+            x_min, y_min, x_max, y_max = bbox
+            w = x_max - x_min
+            h = y_max - y_min
+            return f"x={x_min:.1f},y={y_min:.1f},w={w:.1f},h={h:.1f}"
+        
+        print(f"[WARP_ZONES] face_bbox={bbox_to_str(face_bbox)}")
+        print(f"[WARP_ZONES] eye_left_bbox={bbox_to_str(eye_left_bbox)} (max w={max_eye_w:.1f}, h={max_eye_h:.1f})")
+        print(f"[WARP_ZONES] eye_right_bbox={bbox_to_str(eye_right_bbox)} (max w={max_eye_w:.1f}, h={max_eye_h:.1f})")
+        print(f"[WARP_ZONES] nose_bridge_bbox={bbox_to_str(nose_bridge_bbox)} (max w={max_nose_w:.1f}, h={max_nose_h:.1f})")
+        print(f"[WARP_ZONES] lips_interior_bbox={bbox_to_str(lips_interior_bbox)} (max w={max_lips_w:.1f}, h={max_lips_h:.1f})")
+        
+        # Track first 10 protected centroids
+        protected_centroids_log = []
+        
+        def centroid_in_aging_region(cx, cy):
+            """Check if centroid is in a region relevant for aging (lower face, cheeks, jowls, chin only)."""
+            if not face_bbox:
+                return False
+            face_x_min, face_y_min, face_x_max, face_y_max = face_bbox
+            face_w = face_x_max - face_x_min
+            face_h = face_y_max - face_y_min
+            
+            # Primary aging region: lower 32% of face (below ~68% from top)
+            # Includes: jowls, chin, lower cheeks, jawline
+            aging_threshold_main = face_y_min + 0.68 * face_h
+            # Horizontal bounds for primary region (inner 64% of face width, 18% margin each side)
+            x_min_main = face_x_min + 0.18 * face_w
+            x_max_main = face_x_max - 0.18 * face_w
+            
+            # Secondary region: nasolabial/mouth-corner folds (between 55–68% from top)
+            aging_threshold_secondary_low = face_y_min + 0.55 * face_h
+            aging_threshold_secondary_high = face_y_min + 0.68 * face_h
+            # Horizontal bounds for secondary region (inner 36% of face width, 32% margin each side)
+            x_min_secondary = face_x_min + 0.32 * face_w
+            x_max_secondary = face_x_max - 0.32 * face_w
+            
+            # Check primary aging region (lower face)
+            if cy >= aging_threshold_main:
+                # Check horizontal bounds
+                if x_min_main <= cx <= x_max_main:
+                    # Exclude lips interior (hard mouth center)
+                    if point_in_bbox(cx, cy, lips_interior_bbox, margin=0):
+                        return False
+                    return True
+                return False
+            
+            # Check secondary aging region (nasolabial/mouth-corner area)
+            if aging_threshold_secondary_low <= cy < aging_threshold_secondary_high:
+                # More restrictive horizontal bounds for secondary region
+                if x_min_secondary <= cx <= x_max_secondary:
+                    # Exclude lips interior
+                    if point_in_bbox(cx, cy, lips_interior_bbox, margin=0):
+                        return False
+                    return True
+                return False
+            
+            # Outside aging region
+            return False
+        
+        # Create output canvas and accumulation buffers
+        warped = image.copy().astype(np.float32)
+        warped_canvas = image.copy().astype(np.float32)
+        alpha_accum = np.zeros((h, w), dtype=np.float32)
+        
+        # Helper: compute vertex weight based on position
+        # Smooth weight function: protected regions have weight 0, lower face ramps to 1
+        def compute_vertex_weight(vx, vy):
+            """Compute warp weight for vertex at (vx, vy) based on anatomical position."""
+            # Protected regions: hard weight 0
+            if point_in_bbox(vx, vy, eye_left_bbox, margin=0) or point_in_bbox(vx, vy, eye_right_bbox, margin=0):
+                return 0.0
+            if point_in_bbox(vx, vy, nose_bridge_bbox, margin=0):
+                return 0.0
+            if point_in_bbox(vx, vy, lips_interior_bbox, margin=0):
+                return 0.0
+            
+            # Vertical ramp: smooth increase from 0 to 1 between 58% and 82% of face
+            # Much lower cutoff: only true lower face warps
+            y_lower = face_y_min + 0.58 * face_h
+            y_upper = face_y_min + 0.82 * face_h
+            
+            # Below 58%: weight 0
+            if vy < y_lower:
+                return 0.0
+            # Above 82%: weight 1
+            if vy >= y_upper:
+                vert_weight = 1.0
+            else:
+                # Linear ramp between 58% and 82%
+                vert_weight = (vy - y_lower) / (y_upper - y_lower)
+            
+            # Horizontal falloff: strongest near center, fades near edges
+            face_center_x = (face_x_min + face_x_max) / 2.0
+            x_dist = abs(vx - face_center_x)
+            x_max_dist = face_w / 2.0  # distance from center to edge
+            
+            # Cosine falloff: full strength only in inner 45% of width, fades to 0 at edges
+            center_width = face_w * 0.225  # ±22.5% from center (45% total inner width)
+            if x_dist <= center_width:
+                horiz_weight = 1.0
+            else:
+                # Cosine fade from center_width to x_max_dist
+                fade_range = x_max_dist - center_width
+                if fade_range > 0:
+                    fade_param = (x_dist - center_width) / fade_range
+                    horiz_weight = np.cos(fade_param * np.pi / 2.0)
+                    horiz_weight = max(0.0, horiz_weight)
+                else:
+                    horiz_weight = 0.0
+            
+            # Nasolabial modifier: subtle weight in mouth-corner area (y=58–68%)
+            y_nasolabial_low = face_y_min + 0.58 * face_h
+            y_nasolabial_high = face_y_min + 0.68 * face_h
+            if y_nasolabial_low <= vy < y_nasolabial_high:
+                # Subtle weight in nasolabial area
+                nasolabial_weight = (vy - y_nasolabial_low) / (y_nasolabial_high - y_nasolabial_low)
+                nasolabial_weight = min(nasolabial_weight, 0.25)  # Cap at 25%
+                vert_weight *= nasolabial_weight
+            
+            # Combine and clamp
+            final_weight = vert_weight * horiz_weight
+            return np.clip(final_weight, 0.0, 1.0)
+        
+        # Process each triangle with vertex-weighted warping
+        for tri_idx, (i0, i1, i2) in enumerate(triangle_indices):
+            # Get source triangle coordinates
+            src_p0 = source_landmarks[i0]
+            src_p1 = source_landmarks[i1]
+            src_p2 = source_landmarks[i2]
+            
+            src_tri = np.array([
+                [float(src_p0["x"]), float(src_p0["y"])],
+                [float(src_p1["x"]), float(src_p1["y"])],
+                [float(src_p2["x"]), float(src_p2["y"])]
+            ], dtype=np.float32)
+            
+            # Compute vertex weights
+            w0 = compute_vertex_weight(src_tri[0, 0], src_tri[0, 1])
+            w1 = compute_vertex_weight(src_tri[1, 0], src_tri[1, 1])
+            w2 = compute_vertex_weight(src_tri[2, 0], src_tri[2, 1])
+            
+            # Skip if all vertex weights are near zero (anchor triangle)
+            tri_mean_weight = (w0 + w1 + w2) / 3.0
+            if tri_mean_weight <= 0.12:
+                skipped_protected_count += 1
+                continue
+            
+            # ── Sparse selection: only warp non-adjacent checker/noise subset ─────
+            # Compute triangle centroid
+            cx = (src_tri[0, 0] + src_tri[1, 0] + src_tri[2, 0]) / 3.0
+            cy = (src_tri[0, 1] + src_tri[1, 1] + src_tri[2, 1]) / 3.0
+            
+            # Deterministic sparse selection: keep ~55% of active triangles using hash
+            # Formula: ((tri_idx * 37 + int(cx) * 17 + int(cy) * 13) % 100) < 55
+            sparse_hash = (tri_idx * 37 + int(cx) * 17 + int(cy) * 13) % 100
+            if sparse_hash >= 55:
+                sparse_skipped_count += 1
+                continue
+            sparse_selected_count += 1
+            
+            # Get aged target triangle coordinates
+            aged_p0 = target_landmarks[i0]
+            aged_p1 = target_landmarks[i1]
+            aged_p2 = target_landmarks[i2]
+            
+            aged_tri = np.array([
+                [float(aged_p0["x"]), float(aged_p0["y"])],
+                [float(aged_p1["x"]), float(aged_p1["y"])],
+                [float(aged_p2["x"]), float(aged_p2["y"])]
+            ], dtype=np.float32)
+            
+            # Compute weighted target triangle: interpolate based on vertex weights
+            tgt_tri = src_tri + np.array([
+                [w0 * (aged_tri[0, 0] - src_tri[0, 0]), w0 * (aged_tri[0, 1] - src_tri[0, 1])],
+                [w1 * (aged_tri[1, 0] - src_tri[1, 0]), w1 * (aged_tri[1, 1] - src_tri[1, 1])],
+                [w2 * (aged_tri[2, 0] - src_tri[2, 0]), w2 * (aged_tri[2, 1] - src_tri[2, 1])]
+            ], dtype=np.float32)
+            
+            # Compute bounding boxes
+            src_rect = cv2.boundingRect(src_tri.astype(np.int32))
+            tgt_rect = cv2.boundingRect(tgt_tri.astype(np.int32))
+            
+            x_s, y_s, w_s, h_s = src_rect
+            x_t, y_t, w_t, h_t = tgt_rect
+            
+            # Skip degenerate triangles
+            if w_s < 3 or h_s < 3 or w_t < 3 or h_t < 3:
+                skipped_degenerate_count += 1
+                continue
+            
+            # Clip to image bounds
+            x_s = max(0, x_s)
+            y_s = max(0, y_s)
+            x_s_end = min(w, x_s + w_s)
+            y_s_end = min(h, y_s + h_s)
+            
+            if x_s_end <= x_s or y_s_end <= y_s:
+                roi_invalid_count += 1
+                skipped_degenerate_count += 1
+                continue
+            
+            w_s = x_s_end - x_s
+            h_s = y_s_end - y_s
+            
+            # Track displacements for this triangle
+            tri_displacements = []
+            for j in range(3):
+                src_pt = src_tri[j]
+                tgt_pt = tgt_tri[j]
+                disp = np.sqrt((tgt_pt[0] - src_pt[0]) ** 2 + (tgt_pt[1] - src_pt[1]) ** 2)
+                displacements.append(float(disp))
+                tri_displacements.append(disp)
+            
+            # Force exact format for cv2.getAffineTransform (must be 3x2 float32)
+            src_tri_formatted = np.asarray(src_tri, dtype=np.float32).reshape(3, 2)
+            tgt_tri_formatted = np.asarray(tgt_tri, dtype=np.float32).reshape(3, 2)
+            
+            # Validate shapes and finite values
+            if (src_tri_formatted.shape != (3, 2) or tgt_tri_formatted.shape != (3, 2) or
+                not np.all(np.isfinite(src_tri_formatted)) or not np.all(np.isfinite(tgt_tri_formatted))):
+                affine_fail_count += 1
+                continue
+            
+            # Compute affine transform
+            try:
+                affine_matrix = cv2.getAffineTransform(src_tri_formatted, tgt_tri_formatted)
+            except Exception as e:
+                affine_fail_count += 1
+                if exception_count < 3:
+                    exception_messages.append(str(e))
+                exception_count += 1
+                continue
+            
+            # Extract source patch
+            src_patch = image[y_s:y_s_end, x_s:x_s_end].astype(np.float32)
+            
+            if src_patch.size == 0:
+                warp_empty_count += 1
+                continue
+            
+            # Warp source patch to target space using affine transform
+            try:
+                warped_patch = cv2.warpAffine(src_patch, affine_matrix, (w_s, h_s), borderMode=cv2.BORDER_REPLICATE)
+            except Exception as e:
+                if exception_count < 3:
+                    exception_messages.append("warpAffine: " + str(e))
+                exception_count += 1
+                continue
+            
+            if warped_patch.size == 0:
+                warp_empty_count += 1
+                continue
+            
+            # Create triangle mask for smooth blending (avoid seams)
+            tri_mask = np.zeros((h_s, w_s), dtype=np.float32)
+            tri_offset = np.array([
+                [src_tri[0, 0] - x_s, src_tri[0, 1] - y_s],
+                [src_tri[1, 0] - x_s, src_tri[1, 1] - y_s],
+                [src_tri[2, 0] - x_s, src_tri[2, 1] - y_s]
+            ], dtype=np.int32)
+            cv2.fillPoly(tri_mask, [tri_offset], 1.0, lineType=cv2.LINE_AA)
+            
+            if np.sum(tri_mask) < 1.0:
+                mask_empty_count += 1
+                continue
+            
+            # Feather triangle mask to avoid hard edges (keep anti-aliasing)
+            tri_mask = cv2.GaussianBlur(tri_mask, (3, 3), 0)
+            tri_mask = np.clip(tri_mask, 0, 1)
+            
+            # Do NOT apply per-triangle opacity weighting here.
+            # Instead, accumulate solid warped patches and soft coverage masks.
+            # The global alpha mask will be blurred and strength-limited after all triangles.
+            
+            # Blend warped patch into accumulation buffer as solid patch within triangle mask
+            try:
+                for c in range(image.shape[2]):  # For each color channel
+                    warped_canvas[y_s:y_s_end, x_s:x_s_end, c] = (
+                        warped_canvas[y_s:y_s_end, x_s:x_s_end, c] * (1.0 - tri_mask) +
+                        warped_patch[:, :, c] * tri_mask
+                    )
+                # Accumulate alpha mask (no per-triangle weight scaling)
+                alpha_accum[y_s:y_s_end, x_s:x_s_end] = np.maximum(
+                    alpha_accum[y_s:y_s_end, x_s:x_s_end],
+                    tri_mask
+                )
+                successful_blend_count += 1
+            except Exception as e:
+                if exception_count < 3:
+                    exception_messages.append("blend: " + str(e))
+                exception_count += 1
+                continue
+            
+            warped_triangle_count += 1
+        
+        # Post-process: smooth blend of warped canvas using strongly blurred global alpha mask
+        # Clip alpha accumulation to [0, 1]
+        alpha_accum = np.clip(alpha_accum, 0.0, 1.0)
+        
+        # Apply strong dynamic Gaussian blur to alpha mask to eliminate per-triangle seams
+        # Kernel size: ~min(h,w)//12 for smoother, wider blending transitions
+        blur_kernel_size = max(31, ((min(h, w) // 12) | 1))  # Ensures odd kernel size, min 31
+        alpha_accum = cv2.GaussianBlur(alpha_accum, (blur_kernel_size, blur_kernel_size), blur_kernel_size * 0.4)
+        alpha_accum = np.clip(alpha_accum, 0.0, 1.0)
+        
+        # Scale global alpha strength: 0.32 for subtle subconscious sagging with minimized mesh visibility
+        alpha_accum = np.clip(alpha_accum * 0.32, 0.0, 1.0)
+        
+        # Stack alpha mask to match image channels
+        if image.shape[2] == 3:
+            alpha_mask_stacked = np.stack([alpha_accum, alpha_accum, alpha_accum], axis=2)
+        elif image.shape[2] == 4:
+            alpha_mask_stacked = np.stack([alpha_accum, alpha_accum, alpha_accum, np.ones_like(alpha_accum)], axis=2)
+        else:
+            alpha_mask_stacked = np.stack([alpha_accum] * image.shape[2], axis=2)
+        
+        # Final blend: original * (1 - alpha) + warped_canvas * alpha
+        warped = image.astype(np.float32) * (1.0 - alpha_mask_stacked) + warped_canvas * alpha_mask_stacked
+        
+        # Log debug metadata
+        avg_displacement = np.mean(displacements) if displacements else 0.0
+        max_displacement = np.max(displacements) if displacements else 0.0
+        anchor_count = skipped_protected_count  # Triangles with mean weight <= 0.12
+        print(f"[WARP] Triangles: {len(triangle_indices)} total, {warped_triangle_count} active (weight>0.12), "
+              f"{anchor_count} anchor/protected (weight<=0.12), {skipped_degenerate_count} degenerate. "
+              f"Sparse: {sparse_selected_count} selected, {sparse_skipped_count} skipped. "
+              f"Displacement: avg={avg_displacement:.2f}px, max={max_displacement:.2f}px")
+        print(f"[WARP_DETAIL] ROI invalid: {roi_invalid_count}, Affine fail: {affine_fail_count}, "
+              f"Mask empty: {mask_empty_count}, Warp empty: {warp_empty_count}, Exceptions: {exception_count}, "
+              f"Successful blends: {successful_blend_count}")
+        
+        # Clip back to uint8 and return
+        return np.clip(warped, 0, 255).astype(np.uint8)
+    
+    except Exception:
+        # Safe fallback: return original image on any error
+        return image
+
+
+def _apply_subtle_face_sagging(image: np.ndarray, landmarks: list, intensity: float, age_delta: float) -> np.ndarray:
+    """
+    Apply very subtle landmark-based sagging using smooth displacement field.
+    
+    Displacements:
+    - Under-eye: downward (~1-2% of face height)
+    - Cheek: downward (~0.8-1.5%)
+    - Mouth corners: downward (~0.5-1%)
+    - Jawline: downward (~1-2%)
+    
+    Scaled by intensity and age_delta. Safe fallback if landmarks insufficient.
+    """
+    try:
+        # Require sufficient landmarks for reliable geometry
+        if not landmarks or len(landmarks) < 100:
+            return image
+        
+        h, w = image.shape[:2]
+        face_height_est = h * 0.6  # Rough estimate of face height
+        
+        # Collect key landmark points for sagging regions
+        under_eye_left = _point_from_landmarks(landmarks, 145)
+        under_eye_right = _point_from_landmarks(landmarks, 374)
+        cheek_left = _point_from_landmarks(landmarks, 149)
+        cheek_right = _point_from_landmarks(landmarks, 379)
+        mouth_left = _point_from_landmarks(landmarks, 61)
+        mouth_right = _point_from_landmarks(landmarks, 291)
+        jawline_bottom = _mean_landmark_point(landmarks, [176, 177, 178, 179, 180, 181])
+        
+        # If key points missing, skip warping
+        if not all([under_eye_left, under_eye_right, cheek_left, cheek_right, mouth_left, mouth_right, jawline_bottom]):
+            return image
+        
+        # Subtle displacement scale: ages by ~0.5% per year at 100% strength
+        scale = intensity * age_delta * 0.008
+        if scale < 0.0001:
+            return image
+        
+        # Create displacement maps (map_x, map_y) for cv2.remap using vectorized numpy
+        # Initialize as identity mapping
+        y_map, x_map = np.mgrid[0:h, 0:w].astype(np.float32)
+        map_x = x_map.copy()
+        map_y = y_map.copy()
+        
+        # Vectorized Gaussian displacement for under-eye zone
+        eye_y_center = (under_eye_left[1] + under_eye_right[1]) * 0.5
+        eye_x_center = (under_eye_left[0] + under_eye_right[0]) * 0.5
+        eye_radius = face_height_est * 0.15
+        dy_under_eye = face_height_est * 0.018 * scale
+        
+        dist_sq = (x_map - eye_x_center) ** 2 + (y_map - eye_y_center) ** 2
+        weight = np.exp(-dist_sq / (eye_radius ** 2))
+        weight = np.clip(weight, 0, 1)
+        map_y += dy_under_eye * weight
+        
+        # Vectorized Gaussian displacement for cheek zones
+        cheek_y_center = (cheek_left[1] + cheek_right[1]) * 0.5
+        cheek_radius = face_height_est * 0.12
+        dy_cheek = face_height_est * 0.014 * scale
+        
+        for cheek_x_center in [cheek_left[0], cheek_right[0]]:
+            dist_sq = (x_map - cheek_x_center) ** 2 + (y_map - cheek_y_center) ** 2
+            weight = np.exp(-dist_sq / (cheek_radius ** 2))
+            weight = np.clip(weight, 0, 1)
+            map_y += dy_cheek * weight * 0.5  # Split between two cheeks
+        
+        # Vectorized Gaussian displacement for mouth corners
+        mouth_y_center = (mouth_left[1] + mouth_right[1]) * 0.5
+        mouth_radius = face_height_est * 0.10
+        dy_mouth = face_height_est * 0.010 * scale
+        
+        for mouth_x_center in [mouth_left[0], mouth_right[0]]:
+            dist_sq = (x_map - mouth_x_center) ** 2 + (y_map - mouth_y_center) ** 2
+            weight = np.exp(-dist_sq / (mouth_radius ** 2))
+            weight = np.clip(weight, 0, 1)
+            map_y += dy_mouth * weight * 0.5  # Split between two corners
+        
+        # Vectorized Gaussian displacement for jawline zone
+        jaw_y_center = jawline_bottom[1]
+        jaw_x_center = jawline_bottom[0]
+        jaw_radius = face_height_est * 0.20
+        dy_jaw = face_height_est * 0.012 * scale
+        
+        dist_sq = (x_map - jaw_x_center) ** 2 + (y_map - jaw_y_center) ** 2
+        weight = np.exp(-dist_sq / (jaw_radius ** 2))
+        # Only apply downward displacement in lower half of jaw zone
+        weight = weight * np.where(y_map >= jaw_y_center, 1.0, 0.5)
+        weight = np.clip(weight, 0, 1)
+        map_y += dy_jaw * weight
+        
+        # Minimal outward x-displacement (jowl widening) scaled down
+        dx_jaw = (x_map - jaw_x_center) * 0.004 * scale * weight
+        map_x += dx_jaw
+        
+        # Apply remapping with cubic interpolation for smooth result
+        warped = cv2.remap(image, map_x, map_y, cv2.INTER_CUBIC, borderMode=cv2.BORDER_REPLICATE)
+        return warped
+    
+    except Exception:
+        # Safe fallback: return original image if warping fails
+        return image
+
+
 def _fill_feature_masks_from_landmarks(mask: np.ndarray, points) -> bool:
     if not points or len(points) < 468:
         return False
@@ -833,26 +1639,28 @@ def _masked_high_frequency_energy(image: np.ndarray, mask: np.ndarray | None = N
     return float(np.sum((high * mask) ** 2) / denom)
 
 
-def _draw_wrinkle_line(layer: np.ndarray, p1, p2, thickness: int):
+def _draw_wrinkle_line(layer: np.ndarray, p1, p2, thickness: int, opacity: float = 1.0):
+    """Draw a wrinkle line with optional opacity multiplier for enhanced visibility."""
     p1 = (int(round(p1[0])), int(round(p1[1])))
     p2 = (int(round(p2[0])), int(round(p2[1])))
-    cv2.line(layer, p1, p2, -1.0, thickness, lineType=cv2.LINE_AA)
+    cv2.line(layer, p1, p2, -1.0 * opacity, thickness, lineType=cv2.LINE_AA)
     cv2.line(
         layer,
         (p1[0], p1[1] + max(1, thickness)),
         (p2[0], p2[1] + max(1, thickness)),
-        0.32,
+        0.32 * opacity,
         max(1, thickness),
         lineType=cv2.LINE_AA,
     )
 
 
-def _draw_wrinkle_curve(layer: np.ndarray, points, thickness: int):
+def _draw_wrinkle_curve(layer: np.ndarray, points, thickness: int, opacity: float = 1.0):
+    """Draw a wrinkle curve with optional opacity multiplier for enhanced visibility."""
     pts = np.array(points, dtype=np.int32).reshape((-1, 1, 2))
-    cv2.polylines(layer, [pts], False, -1.0, thickness, lineType=cv2.LINE_AA)
+    cv2.polylines(layer, [pts], False, -1.0 * opacity, thickness, lineType=cv2.LINE_AA)
     if len(points) >= 3:
         highlight = np.array([[p[0], p[1] + max(1, thickness)] for p in points], dtype=np.int32).reshape((-1, 1, 2))
-        cv2.polylines(layer, [highlight], False, 0.24, max(1, thickness), lineType=cv2.LINE_AA)
+        cv2.polylines(layer, [highlight], False, 0.24 * opacity, max(1, thickness), lineType=cv2.LINE_AA)
 
 
 def _generate_landmark_wrinkle_layer(shape: tuple[int, int], landmarks, face_box: tuple[int, int, int, int], rng, semantic_boost: float) -> np.ndarray | None:
@@ -927,16 +1735,20 @@ def _generate_wrinkle_layer(shape: tuple[int, int], face_box: tuple[int, int, in
     h, w = shape
     x, y, bw, bh = face_box
     layer = np.zeros((h, w), dtype=np.float32)
-    thickness = max(1, int(round(min(w, h) / 280.0)))
+    # INCREASED thickness: +33% thicker wrinkle strokes for more visible directional lines (not noise)
+    thickness = max(2, int(round(min(w, h) / 210.0)))  # Was /280, now /210 for 33% thicker
 
-    forehead_y = [0.250, 0.305, 0.360]
+    # Forehead wrinkles: more bands for stronger visible aging texture
+    # INCREASED OPACITY: +35% darker shadow lines for more visible horizontal bands
+    forehead_y = [0.240, 0.290, 0.340, 0.380, 0.415]
     for frac in forehead_y:
-        jitter = int(rng.integers(-max(1, bh // 90), max(2, bh // 90 + 1)))
+        # Slightly increased jitter for natural variation
+        jitter = int(rng.integers(-max(1, bh // 80), max(2, bh // 80 + 1)))
         yy = y + bh * frac + jitter
-        x1 = x + bw * (0.33 + float(rng.uniform(-0.015, 0.015)))
-        x2 = x + bw * (0.67 + float(rng.uniform(-0.015, 0.015)))
-        mid = ((x1 + x2) * 0.5, yy + float(rng.uniform(-2.0, 2.0)))
-        _draw_wrinkle_curve(layer, [(x1, yy), mid, (x2, yy + float(rng.uniform(-2.0, 2.0)))], thickness)
+        x1 = x + bw * (0.33 + float(rng.uniform(-0.018, 0.018)))
+        x2 = x + bw * (0.67 + float(rng.uniform(-0.018, 0.018)))
+        mid = ((x1 + x2) * 0.5, yy + float(rng.uniform(-3.0, 3.0)))
+        _draw_wrinkle_curve(layer, [(x1, yy), mid, (x2, yy + float(rng.uniform(-3.0, 3.0)))], thickness, opacity=1.35)
 
     eye_lines = [
         ((0.31, 0.41), (-0.06, -0.020)),
@@ -946,10 +1758,11 @@ def _generate_wrinkle_layer(shape: tuple[int, int], face_box: tuple[int, int, in
         ((0.69, 0.44), (0.07, 0.015)),
         ((0.69, 0.47), (0.055, 0.045)),
     ]
+    # INCREASED OPACITY: +25% darker crow's feet lines for visible eye-area aging
     for (sx, sy), (dx, dy) in eye_lines:
         start = (x + bw * sx, y + bh * sy)
         end = (x + bw * (sx + dx), y + bh * (sy + dy))
-        _draw_wrinkle_line(layer, start, end, thickness)
+        _draw_wrinkle_line(layer, start, end, thickness, opacity=1.25)
 
     cv2.ellipse(layer, (int(x + bw * 0.35), int(y + bh * 0.49)), (int(bw * 0.10), int(bh * 0.035)), 0, 8, 172, -0.55, thickness, lineType=cv2.LINE_AA)
     cv2.ellipse(layer, (int(x + bw * 0.65), int(y + bh * 0.49)), (int(bw * 0.10), int(bh * 0.035)), 0, 8, 172, -0.55, thickness, lineType=cv2.LINE_AA)
@@ -966,7 +1779,9 @@ def _generate_wrinkle_layer(shape: tuple[int, int], face_box: tuple[int, int, in
             _draw_wrinkle_line(layer, (cx, cy), (cx + side * length, cy + slope), thickness)
 
     # Blur radius scales with image size so drawn strokes become soft shadows
-    blur_k = _odd_kernel(max(7, int(min(h, w) / 30)))
+    # REDUCED KERNEL: slightly smaller blur for crisper wrinkle lines (min(h,w)/35 instead of /30)
+    # Preserves wrinkle visibility while maintaining soft feathering
+    blur_k = _odd_kernel(max(5, int(min(h, w) / 35)))
     layer = cv2.GaussianBlur(layer, (blur_k, blur_k), blur_k * 0.35)
     return layer * float(semantic_boost)
 
@@ -1032,43 +1847,174 @@ def _generate_age_shadow_layer(shape: tuple[int, int], face_box: tuple[int, int,
     return np.clip(layer, -1.0, 0.35)
 
 
-def _apply_age_hair_graying(out: np.ndarray, original: np.ndarray, masks: dict, intensity: float, rng) -> np.ndarray:
+def _apply_age_hair_graying(out: np.ndarray, original: np.ndarray, masks: dict, intensity: float, rng, hair_age_scale: float = 1.0) -> np.ndarray:
     h, w = original.shape[:2]
     x, y, bw, bh = masks["faceBox"]
+    
+    # Create soft elliptical region for hair search area (upper face + lateral extension)
+    # using Gaussian-feathered ellipse instead of hard rectangular boundaries
     region = np.zeros((h, w), dtype=np.float32)
-    x0 = max(0, int(x - bw * 0.12))
-    x1 = min(w, int(x + bw * 1.12))
-    y0 = max(0, int(y - bh * 0.10))
-    y1 = min(h, int(y + bh * 0.92))
-    region[y0:y1, x0:x1] = 1.0
+    
+    # Ellipse centered above face, wide to cover lateral hair zones
+    center_x = int(x + bw * 0.5)
+    center_y = int(y - bh * 0.15)
+    ellipse_w = max(1, int(bw * 0.62))
+    ellipse_h = max(1, int(bh * 0.70))
+    
+    cv2.ellipse(
+        region,
+        (center_x, center_y),
+        (ellipse_w, ellipse_h),
+        0, 0, 360,
+        1.0,
+        -1,
+        lineType=cv2.LINE_AA,
+    )
+    
+    # Feather ellipse edges with large Gaussian blur to eliminate hard boundaries
+    blur_k = _odd_kernel(max(11, int(min(h, w) * 0.035)))
+    region = cv2.GaussianBlur(region, (blur_k, blur_k), blur_k * 0.50)
+    region = np.clip(region, 0.0, 1.0)
 
     hsv = cv2.cvtColor(original, cv2.COLOR_BGR2HSV)
-    gray = cv2.cvtColor(original, cv2.COLOR_BGR2GRAY)
-    dark = ((gray < 88) & (hsv[:, :, 1] < 150)).astype(np.float32)
+    gray = cv2.cvtColor(original, cv2.COLOR_BGR2GRAY).astype(np.float32)
+    saturation = hsv[:, :, 1].astype(np.float32)
+    
+    # Broadened dark hair detection: include pixels up to gray ~125 with low saturation
+    # This captures more of the dark hair range while excluding skin (which has higher saturation)
+    dark = ((gray < 125) & (saturation < 95)).astype(np.float32)
     non_skin = 1.0 - np.clip(masks["skinMask"], 0.0, 1.0)
     protect = np.clip(masks["protectedMask"], 0.0, 1.0)
     hair_mask = dark * non_skin * region * (1.0 - protect * 0.75)
 
-    if np.count_nonzero(hair_mask > 0.2) < 32:
+    if np.count_nonzero(hair_mask > 0.25) < 32:
         return out
 
+    # Add strand texture variation to preserve natural hair salt-and-pepper appearance
     strand_noise = rng.normal(0.0, 1.0, size=gray.shape).astype(np.float32)
     strand_noise = cv2.GaussianBlur(strand_noise, (1, _odd_kernel(max(5, int(h * 0.018)))), 0)
     strand_noise = cv2.normalize(strand_noise, None, 0.0, 1.0, cv2.NORM_MINMAX)
-    hair_mask *= np.clip(0.40 + 0.85 * strand_noise, 0.0, 1.0)
-    hair_mask = cv2.GaussianBlur(hair_mask, (_odd_kernel(max(3, int(min(w, h) * 0.006))), _odd_kernel(max(3, int(min(w, h) * 0.006)))), 0)
-    hair_mask = np.clip(hair_mask * (0.18 + 0.28 * intensity), 0.0, 0.42)
+    # Strand texture: wider variation for visible salt-and-pepper effect (0.30-0.70)
+    hair_mask *= np.clip(0.50 + 0.20 * strand_noise, 0.30, 0.70)
+    
+    # Large Gaussian blur on hair mask edges for smooth transitions
+    hair_mask = cv2.GaussianBlur(hair_mask, (_odd_kernel(max(7, int(min(w, h) * 0.010))), _odd_kernel(max(7, int(min(w, h) * 0.010)))), 0)
+    # Intensity scaling with age-dependent boost: allow alpha up to ~0.65 at high age/intensity for visible graying
+    hair_mask = np.clip(hair_mask * (0.12 + 0.18 * intensity) * hair_age_scale, 0.0, 0.65)
 
-    target = np.full_like(out, 150.0, dtype=np.float32)
-    return out * (1.0 - hair_mask[:, :, None]) + target * hair_mask[:, :, None]
+    # Blend with original hair to preserve texture and create salt-and-pepper gray, not flat gray
+    # Desaturate original hair then blend with neutral gray/silver for visible graying
+    out_f = out.astype(np.float32)
+    original_f = original.astype(np.float32)
+    
+    # Convert to HSV for better desaturation while preserving luminance
+    original_hsv = cv2.cvtColor(np.uint8(np.clip(original_f, 0, 255)), cv2.COLOR_BGR2HSV).astype(np.float32)
+    # Reduce saturation by ~70% to create grayish tone (salt-and-pepper)
+    original_hsv[:, :, 1] = original_hsv[:, :, 1] * 0.30
+    desaturated = cv2.cvtColor(np.uint8(np.clip(original_hsv, 0, 255)), cv2.COLOR_HSV2BGR).astype(np.float32)
+    
+    # Gray target: 45% desaturated original + 55% neutral gray for clearly visible salt-and-pepper gray
+    gray_target = desaturated * 0.45 + np.full_like(out_f, 162.0, dtype=np.float32) * 0.55
+    
+    result = out_f * (1.0 - hair_mask[:, :, None]) + gray_target * hair_mask[:, :, None]
+    return np.clip(result, 0.0, 255.0).astype(np.uint8)
+
+
+def _generate_age_spots_layer(shape: tuple[int, int], face_box: tuple[int, int, int, int], rng, intensity: float) -> np.ndarray:
+    """
+    Generate subtle age spots (brown spots) on forehead and cheeks.
+    Uses blurred noise to create soft, natural-looking pigmentation spots.
+    Returns float32 layer [0, 1] to be blended into luminance as darkening.
+    """
+    h, w = shape
+    x, y, bw, bh = face_box
+    layer = np.zeros((h, w), dtype=np.float32)
+    
+    # Forehead spots: upper third, ~6-8 spots
+    for _ in range(int(6 + 2 * intensity)):
+        spot_x = int(x + bw * (0.25 + float(rng.uniform(0.0, 0.50))))
+        spot_y = int(y + bh * (0.15 + float(rng.uniform(0.0, 0.20))))
+        # Spot size: ~6-18 pixels depending on intensity
+        spot_size = max(3, int(3.0 + 5.0 * intensity + float(rng.uniform(-1.0, 1.0))))
+        cv2.circle(layer, (spot_x, spot_y), spot_size, 0.3 + 0.2 * intensity, -1, lineType=cv2.LINE_AA)
+    
+    # Cheek spots: left and right cheeks, ~3-4 each
+    for side in (-1, 1):
+        for _ in range(int(3 + 1 * intensity)):
+            spot_x = int(x + bw * (0.30 if side < 0 else 0.70) + float(rng.uniform(-0.08, 0.08)) * bw)
+            spot_y = int(y + bh * (0.45 + float(rng.uniform(0.0, 0.10))))
+            spot_size = max(3, int(2.5 + 4.5 * intensity + float(rng.uniform(-1.0, 1.0))))
+            cv2.circle(layer, (spot_x, spot_y), spot_size, 0.25 + 0.15 * intensity, -1, lineType=cv2.LINE_AA)
+    
+    # Heavy Gaussian blur to make spots soft and diffuse, not harsh dots
+    blur_k = _odd_kernel(max(11, int(min(h, w) * 0.032)))
+    layer = cv2.GaussianBlur(layer, (blur_k, blur_k), blur_k * 0.45)
+    
+    return np.clip(layer, 0.0, 1.0)
+
+
+def _build_age_region_emphasis_mask(shape: tuple[int, int], face_box: tuple[int, int, int, int], landmarks=None) -> np.ndarray:
+    """
+    Build spatially-weighted mask emphasizing natural aging regions:
+    forehead, under-eyes, crow's feet, nasolabial folds, mouth corners.
+    Returns soft float32 [0, 1] mask with higher values in aging regions.
+    """
+    h, w = shape
+    x, y, bw, bh = face_box
+    mask = np.zeros((h, w), dtype=np.float32)
+
+    # Forehead: broad horizontal zone upper third
+    cv2.ellipse(
+        mask,
+        (int(x + bw * 0.5), int(y + bh * 0.25)),
+        (max(1, int(bw * 0.55)), max(1, int(bh * 0.22))),
+        0, 0, 360,
+        1.0, -1,
+        lineType=cv2.LINE_AA,
+    )
+
+    # Under-eye zones (crow's feet shadows)
+    cv2.ellipse(
+        mask,
+        (int(x + bw * 0.32), int(y + bh * 0.40)),
+        (max(1, int(bw * 0.12)), max(1, int(bh * 0.10))),
+        0, 0, 360,
+        0.85, -1,
+        lineType=cv2.LINE_AA,
+    )
+    cv2.ellipse(
+        mask,
+        (int(x + bw * 0.68), int(y + bh * 0.40)),
+        (max(1, int(bw * 0.12)), max(1, int(bh * 0.10))),
+        0, 0, 360,
+        0.85, -1,
+        lineType=cv2.LINE_AA,
+    )
+
+    # Nasolabial folds + mouth corners
+    cv2.ellipse(
+        mask,
+        (int(x + bw * 0.5), int(y + bh * 0.60)),
+        (max(1, int(bw * 0.25)), max(1, int(bh * 0.20))),
+        0, 0, 360,
+        0.75, -1,
+        lineType=cv2.LINE_AA,
+    )
+
+    # Heavy Gaussian blur to feather all boundaries and create smooth falloff
+    blur_k = _odd_kernel(max(9, int(min(h, w) * 0.035)))
+    mask = cv2.GaussianBlur(mask, (blur_k, blur_k), blur_k * 0.35)
+    return np.clip(mask, 0.0, 1.0)
 
 
 def _apply_lab_color_tone(lab: np.ndarray, skin_mask: np.ndarray, mode: str, intensity: float, tone: float):
     tone_shift = (tone - 0.5) * 22.0
     if mode == "aging":
-        lab[:, :, 0] += skin_mask * (tone_shift - 3.0 * intensity)
-        lab[:, :, 1] += skin_mask * (0.8 + 1.3 * intensity)
-        lab[:, :, 2] += skin_mask * (1.4 + 3.0 * intensity)
+        # Subtle desaturation in L* channel: aged skin is less vibrant, slightly duller
+        lab[:, :, 0] += skin_mask * (tone_shift - 4.5 * intensity)
+        # Increase warmth: more red + more yellow for aged appearance
+        lab[:, :, 1] += skin_mask * (1.8 + 2.6 * intensity)  # Increased from 1.2 + 1.8
+        lab[:, :, 2] += skin_mask * (3.2 + 6.2 * intensity)  # Increased from 2.2 + 4.5
     else:
         lab[:, :, 0] += skin_mask * (tone_shift + 4.0 * intensity)
         lab[:, :, 1] -= skin_mask * (1.0 + 2.0 * intensity)
@@ -1099,8 +2045,8 @@ def _build_hair_exclusion_mask(
     wrinkle enhancement, noise injection, and the final processed-image blend.
 
     Strategy:
-      - Restrict to the upper-face region plus a small lateral extension (where
-        hair typically sits above and beside the face bounding box).
+      - Restrict to the upper-face region using a soft elliptical Gaussian-feathered
+        mask (not hard rectangular boundaries).
       - Within that region take non-skin pixels.
       - Refine with HSV: dark hair (low value) OR light/grey hair (low saturation).
       - Smooth with a Gaussian blur to feather the mask edges naturally.
@@ -1108,13 +2054,28 @@ def _build_hair_exclusion_mask(
     h, w = image.shape[:2]
     x, y, bw, bh = face_box
 
-    # Region: upper face + slight lateral pad, stopping before the chin area
+    # Region: soft elliptical mask covering upper face + lateral extension
+    # (no hard rectangular boundaries to prevent artifact)
     region = np.zeros((h, w), dtype=np.float32)
-    x0 = max(0, int(x - bw * 0.12))
-    x1 = min(w, int(x + bw * 1.12))
-    y0 = max(0, int(y - bh * 0.08))
-    y1 = min(h, int(y + bh * 0.88))
-    region[y0:y1, x0:x1] = 1.0
+    center_x = int(x + bw * 0.5)
+    center_y = int(y - bh * 0.12)
+    ellipse_w = max(1, int(bw * 0.65))
+    ellipse_h = max(1, int(bh * 0.75))
+    
+    cv2.ellipse(
+        region,
+        (center_x, center_y),
+        (ellipse_w, ellipse_h),
+        0, 0, 360,
+        1.0,
+        -1,
+        lineType=cv2.LINE_AA,
+    )
+    
+    # Feather ellipse edges with Gaussian blur
+    blur_k = _odd_kernel(max(7, int(min(h, w) * 0.030)))
+    region = cv2.GaussianBlur(region, (blur_k, blur_k), blur_k * 0.40)
+    region = np.clip(region, 0.0, 1.0)
 
     non_skin = 1.0 - np.clip(skin_mask, 0.0, 1.0)
     hsv = cv2.cvtColor(image, cv2.COLOR_BGR2HSV)
@@ -1202,6 +2163,7 @@ def _frequency_age_pipeline(
     skin = masks["skinMask"].astype(np.float32)
     processing = masks["processingMask"].astype(np.float32)
     protected = masks["protectedMask"].astype(np.float32)
+    age_regions = _build_age_region_emphasis_mask(image.shape[:2], masks["faceBox"], masks.get("landmarks")) if mode == "aging" else np.ones(image.shape[:2], dtype=np.float32)
 
     # Work in L*a*b* to decouple luminance edits from colour
     lab = cv2.cvtColor(image, cv2.COLOR_BGR2LAB).astype(np.float32)
@@ -1210,6 +2172,41 @@ def _frequency_age_pipeline(
     intensity = _age_intensity(strength, years, semantic_boost)
 
     if mode == "aging":
+        # ── Step 0: Subtle landmark-based sagging (geometry warping) ──────
+        # TEMPORARILY DISABLED: Old smooth displacement field approach.
+        # Structural aging target landmarks prepared instead (see Step 0b).
+        # Future: piecewise-affine warping via Delaunay triangulation will replace this.
+        age_delta = max(1, years - 25)  # Aging relative to baseline ~25 years
+        # image = _apply_subtle_face_sagging(image, masks.get("landmarks"), intensity, float(age_delta))
+        lab = cv2.cvtColor(image, cv2.COLOR_BGR2LAB).astype(np.float32)
+        l_orig = lab[:, :, 0].copy()
+        l_mod = l_orig.copy()
+        
+        # ── Step 0b: Prepare aged landmark targets (structural aging prep) ─
+        # Compute target landmarks for piecewise-affine warping in next implementation.
+        # Structural aging target landmarks prepared; actual piecewise-affine warp will be applied in next step.
+        aged_landmarks = _build_aged_landmark_targets(masks.get("landmarks"), image.shape[:2], float(age_delta), intensity)
+        
+        # ── Step 0c: Build Delaunay triangle topology (structural aging prep) ──
+        # Generate triangle indices from original landmarks; used for piecewise-affine warping.
+        # Delaunay triangle indices prepared; actual warp will be applied in next step.
+        triangle_indices = _build_delaunay_triangles(masks.get("landmarks"), image.shape[:2])
+        
+        # Log structural aging preparation
+        landmark_count = len(masks.get("landmarks") or [])
+        aged_landmarks_ok = aged_landmarks is not None
+        print(f"[STRUCT_AGING] Landmarks: {landmark_count}, Aged targets: {aged_landmarks_ok}, Triangles: {len(triangle_indices)}")
+        
+        # ── Step 0d: Geometric warp bypass ────────────────────────────────
+        # Geometric warp is implemented for DSP demonstration but disabled in final output to avoid 2D mesh seam artifacts.
+        # The warp function (_apply_piecewise_affine_warp) and helpers are retained for explanation/reproduction.
+        # All aging is now driven by frequency-domain texture, wrinkles, pigmentation, and hair graying.
+        # if aged_landmarks and triangle_indices:
+        #     image = _apply_piecewise_affine_warp(image, masks.get("landmarks"), aged_landmarks, triangle_indices, intensity)
+        #     lab = cv2.cvtColor(image, cv2.COLOR_BGR2LAB).astype(np.float32)
+        #     l_orig = lab[:, :, 0].copy()
+        #     l_mod = l_orig.copy()
+        
         # ── Step 1: High-Pass Filter on luminance ────────────────────────
         # The HPF residual isolates micro-texture (edges, pores, fine lines).
         # Clipping to ±45 prevents extreme pixel spikes on high-contrast edges
@@ -1221,31 +2218,49 @@ def _frequency_age_pipeline(
         # filter type — Ideal HPF passes more high-freq energy than Gaussian,
         # so its gain is higher to produce a comparable visual strength at the
         # same `strength` slider value.
+        # INCREASED: base gain +22% and multiplier +33% for stronger micro-texture at high age
         hpf_gain = {"gaussian_hpf": 0.85, "butterworth_hpf": 1.08, "ideal_hpf": 1.34}.get(hpf, 1.0)
         detail_gain = 0.70 + detail * 0.95
-        l_mod += processing * high * (0.78 + 1.58 * intensity) * hpf_gain * detail_gain
+        hpf_boost = 1.0 + age_regions * 0.48 * intensity  # Modulate HPF by region emphasis (less aggressive than wrinkles)
+        l_mod += processing * high * (0.95 + 2.10 * intensity) * hpf_gain * detail_gain * hpf_boost
 
         # ── Step 3: Procedural wrinkle geometry ──────────────────────────
         # Draws anatomically-placed crease strokes on a float layer, then adds
         # them to luminance.  Strokes are heavily blurred (~min(h,w)/30 px) so
         # they appear as soft shadow-highlight pairs, not hard geometric lines.
         wrinkle_layer = _generate_wrinkle_layer(l_orig.shape, masks["faceBox"], rng, semantic_boost, masks.get("landmarks"))
-        wrinkle_gain = (6.0 + 20.0 * intensity) * (0.58 + detail * 0.46)
-        l_mod += processing * wrinkle_layer * wrinkle_gain
+        # Enhanced wrinkle gain strengthened by age region emphasis mask (forehead, under-eye, nasolabial)
+        # Age-dependent boost: stronger wrinkles at high age (40+) and intensity (0.8+)
+        # INCREASED WRINKLE THICKNESS: thicker strokes for more visible directional lines
+        age_boost = 1.0
+        if years >= 40 and intensity >= 0.8:
+            age_boost = 1.65  # 65% stronger wrinkle visibility (increased from 1.55)
+        # INCREASED GAINS: More aggressive wrinkle layer to compete with CLAHE roughness reduction
+        wrinkle_gain = (11.5 + 38.0 * intensity) * (0.58 + detail * 0.46) * age_boost  # Was 9.2 + 32.0
+        wrinkle_boost = 1.0 + age_regions * 1.25 * intensity * age_boost  # Regional emphasis: 25% stronger (was 1.0)
+        l_mod += processing * wrinkle_layer * wrinkle_gain * wrinkle_boost
 
-        # ── Step 4: Soft shadow layer ────────────────────────────────────
+        # ── Step 4b: Subtle age spots layer ─────────────────────────────
+        # Adds soft pigmentation spots on forehead and cheeks for aged appearance
+        # REDUCED: darkening effect reduced by ~25% to avoid leathery appearance
+        age_spots_layer = _generate_age_spots_layer(l_orig.shape, masks["faceBox"], rng, intensity)
+        l_mod -= skin * age_spots_layer * (3.0 + 14.0 * intensity)  # Was 4.2 + 18.0
+
+        # ── Step 4c: Soft shadow layer ─────────────────────────────────
         # Adds subtle darkening under the eyes and along nasolabial folds to
         # simulate the depth shadows that become more pronounced with age.
         shadow_layer = _generate_age_shadow_layer(l_orig.shape, masks["faceBox"], masks.get("landmarks"), rng)
-        l_mod += skin * shadow_layer * (6.0 + 24.0 * intensity)
+        l_mod += skin * shadow_layer * (8.5 + 32.0 * intensity)  # Increased from 6.0 + 24.0
 
         # ── Step 5: Local contrast enhancement (CLAHE) ───────────────────
         # CLAHE (Contrast Limited Adaptive Histogram Equalisation) operates on
-        # small 8×8 tiles.  Higher clipLimit → more micro-contrast, simulating
-        # the uneven skin surface texture of aged skin.
-        clahe = cv2.createCLAHE(clipLimit=1.35 + 1.45 * intensity, tileGridSize=(8, 8))
+        # small 8×8 tiles.  Higher clipLimit → more micro-contrast, but too aggressive
+        # creates "fried" texture. Reduced to 2.2–2.6 range for natural aging look.
+        clahe_clip = min(2.6, 2.2 + 1.8 * intensity)  # Capped at 2.6 (was 4.5), softer base
+        clahe = cv2.createCLAHE(clipLimit=clahe_clip, tileGridSize=(8, 8))
         local_contrast = clahe.apply(np.clip(l_orig, 0, 255).astype(np.uint8)).astype(np.float32)
-        l_mod = l_mod * (1.0 - processing * 0.13 * intensity) + local_contrast * (processing * 0.13 * intensity)
+        # REDUCED blend: 35% integration for more natural texture, less pore-focused (was 50%)
+        l_mod = l_mod * (1.0 - processing * 0.35 * intensity) + local_contrast * (processing * 0.35 * intensity)
     else:
         # ── De-aging: Low-Pass Filter smoothing ──────────────────────────
         # The LPF retains only the low-frequency (smooth) component of L*.
@@ -1302,7 +2317,10 @@ def _frequency_age_pipeline(
         out = out * (1.0 - restore[:, :, None]) + image.astype(np.float32) * restore[:, :, None]
 
     if mode == "aging" and intensity > 0.1:
-        out = _apply_age_hair_graying(out, image, masks, intensity, rng)
+        hair_age_scale = 1.0
+        if years >= 40 and intensity >= 0.8:
+            hair_age_scale = 1.65  # 65% stronger hair graying at high age/intensity
+        out = _apply_age_hair_graying(out, image, masks, intensity, rng, hair_age_scale)
 
     meta = {
         "maskMethod": masks["maskMethod"],

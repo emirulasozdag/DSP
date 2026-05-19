@@ -326,14 +326,14 @@ def enhance_wrinkles(image: np.ndarray,
 
     # Step 4: region masks and per-region texture
     # (fine_weight, medium_weight, noise_weight, amplitude_scale)
-    # Amplitudes raised so wrinkles are clearly visible at intensity >= 0.5.
+    # Amplitudes increased ~30% so wrinkles and age texture are clearly visible.
     regions = _build_wrinkle_region_masks(h, w, landmarks)
     region_params = {
-        "forehead":      (0.25, 0.55, 0.20, 1.40),
-        "eye_corners":   (0.50, 0.28, 0.22, 1.80),
-        "under_eye":     (0.35, 0.42, 0.23, 1.30),
-        "nasolabial":    (0.22, 0.62, 0.16, 1.60),
-        "mouth_corners": (0.40, 0.38, 0.22, 1.20),
+        "forehead":      (0.25, 0.55, 0.20, 1.82),
+        "eye_corners":   (0.50, 0.28, 0.22, 2.34),
+        "under_eye":     (0.35, 0.42, 0.23, 1.69),
+        "nasolabial":    (0.22, 0.62, 0.16, 2.08),
+        "mouth_corners": (0.40, 0.38, 0.22, 1.56),
     }
     composite = np.zeros((h, w), dtype=np.float32)
     for name, mask in regions.items():
@@ -344,8 +344,8 @@ def enhance_wrinkles(image: np.ndarray,
     composite *= _face_ellipse_mask(h, w)
 
     # Step 6: additive blend.
-    # Gain raised to 20 L* units so wrinkles are clearly visible.
-    lab[:, :, 0] = np.clip(L + composite * (20.0 * intensity), 0.0, 255.0)
+    # Gain raised to 26 L* units so wrinkles and age texture are visibly stronger.
+    lab[:, :, 0] = np.clip(L + composite * (26.0 * intensity), 0.0, 255.0)
 
     # Step 7: reconstruct BGR
     return cv2.cvtColor(lab.astype(np.uint8), cv2.COLOR_LAB2BGR)
@@ -397,12 +397,12 @@ def apply_aged_skin_tone(image: np.ndarray, intensity: float = 0.5) -> np.ndarra
     hsv = cv2.cvtColor(image, cv2.COLOR_BGR2HSV).astype(np.float32)
 
     # Saturation: uniform scale across the whole image (skin and background).
-    # Raised to 40% max desaturation so the colour shift is clearly visible.
-    hsv[:, :, 1] = np.clip(hsv[:, :, 1] * (1.0 - 0.40 * intensity), 0.0, 255.0)
+    # Raised to 50% max desaturation for more visible color shift at higher intensity.
+    hsv[:, :, 1] = np.clip(hsv[:, :, 1] * (1.0 - 0.50 * intensity), 0.0, 255.0)
 
     # Brightness: reduce only inside the face mask (background stays unchanged)
     # v_weight blends from 1.0 (background) to bright_factor (face centre)
-    bright_factor = 1.0 - 0.10 * intensity
+    bright_factor = 1.0 - 0.13 * intensity
     v_weight = 1.0 - face_mask * (1.0 - bright_factor)     # shape (H, W)
     hsv[:, :, 2] = np.clip(hsv[:, :, 2] * v_weight, 0.0, 255.0)
 
@@ -411,27 +411,27 @@ def apply_aged_skin_tone(image: np.ndarray, intensity: float = 0.5) -> np.ndarra
     # ── Stage B-ii: yellow/brown tone shift in L*a*b* ────────────────────────
     # Aged skin has a slightly yellow/jaundiced hue: a* (green-red) shifts
     # slightly warm and b* (blue-yellow) shifts toward yellow.
-    # Applied inside the face ellipse only.
+    # Applied inside the face ellipse only. Increased shift for more visible aging.
     lab_tone = cv2.cvtColor(bgr_hsv, cv2.COLOR_BGR2LAB).astype(np.float32)
     lab_tone[:, :, 1] = np.clip(
-        lab_tone[:, :, 1] + face_mask * (2.5 * intensity), 0.0, 255.0
-    )  # a* shift: slightly warmer
+        lab_tone[:, :, 1] + face_mask * (3.8 * intensity), 0.0, 255.0
+    )  # a* shift: more warmth
     lab_tone[:, :, 2] = np.clip(
-        lab_tone[:, :, 2] + face_mask * (5.0 * intensity), 0.0, 255.0
-    )  # b* shift: yellow-brown
+        lab_tone[:, :, 2] + face_mask * (6.5 * intensity), 0.0, 255.0
+    )  # b* shift: more yellow-brown
     bgr_hsv = cv2.cvtColor(lab_tone.astype(np.uint8), cv2.COLOR_LAB2BGR)
 
     # ── Stage C: CLAHE local contrast on L* channel ──────────────────────────
-    # clipLimit: 1.0 (subtle) → 2.6 (strong) with intensity
-    clahe = cv2.createCLAHE(clipLimit=1.0 + 1.6 * intensity, tileGridSize=(8, 8))
+    # clipLimit: 1.0 (subtle) → 3.0 (strong) with intensity, for more age spots
+    clahe = cv2.createCLAHE(clipLimit=1.0 + 2.0 * intensity, tileGridSize=(8, 8))
 
     lab = cv2.cvtColor(bgr_hsv, cv2.COLOR_BGR2LAB)
     lab[:, :, 0] = clahe.apply(lab[:, :, 0])   # modify L* only; a* b* unchanged
     bgr_clahe = cv2.cvtColor(lab, cv2.COLOR_LAB2BGR).astype(np.float32)
 
     # Alpha-blend CLAHE result onto the HSV result using face mask.
-    # Maximum 40% CLAHE weight at intensity = 1 keeps the effect natural.
-    clahe_w = face_mask * 0.40 * intensity                  # (H, W)
+    # Maximum 50% CLAHE weight at intensity = 1 for stronger age spot effect.
+    clahe_w = face_mask * 0.50 * intensity                  # (H, W)
     result = (
         bgr_hsv.astype(np.float32) * (1.0 - clahe_w[:, :, np.newaxis])
         + bgr_clahe             * clahe_w[:, :, np.newaxis]
