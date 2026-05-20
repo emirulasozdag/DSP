@@ -83,6 +83,32 @@ python -m pip install -r requirements.txt
 python app.py
 ```
 
+### Local AI Aging (PyTorch & SAM) Setup
+
+To ensure that the Local AI Aging feature runs smoothly on another computer, you need to configure the large files and repositories that are ignored in `.gitignore`:
+
+1. **PyTorch & Torchvision Installation:**
+   PyTorch is not included in `requirements.txt` because the installation command depends on the operating system and CUDA (GPU) support. Run one of the following commands in the terminal of the target computer based on your hardware:
+   * **CPU Only (if no GPU or CUDA is not needed):**
+     ```bash
+     pip install torch torchvision --index-url https://download.pytorch.org/whl/cpu
+     ```
+   * **NVIDIA GPU (for fast CUDA 12.1 execution):**
+     ```bash
+     pip install torch torchvision --index-url https://download.pytorch.org/whl/cu121
+     ```
+
+2. **Download `aging.pt` Model Weights (2.27 GB):**
+   Due to GitHub's 100MB file size limit, `models/aging.pt` is not included in the repository.
+   * **Manual Installation:** Upload the `models/aging.pt` file to your own cloud storage (Google Drive, Hugging Face, Dropbox, etc.). Download it on the new machine and place it inside the `models/` directory as `aging.pt`.
+   * **Automatic Installation (gdown):** The `download_models.py` script already has the Google Drive File ID configured. Simply run:
+     ```bash
+     python download_models.py
+     ```
+
+3. **`sam_repo` Automatic Setup:**
+   Ensure that `git` is installed on the target computer. When the project runs for the first time, `face_aging/aging_service.py` will automatically clone the `sam_repo` directory from GitHub. If the target machine is offline, you can manually zip your local `sam_repo` folder and extract it to the project root directory.
+
 If macOS blocks the webcam, allow camera access for your terminal or IDE:
 
 ```text

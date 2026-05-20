@@ -61,22 +61,7 @@ if not _replicate_key_check:
 del _replicate_key_check  # don't leave the key value dangling in module scope
 # ---------------------------------------------------------------------------
 
-try:
-    import requests as _requests  # used as fallback / helper
-except ImportError:  # pragma: no cover
-    _requests = None
 
-try:
-    import replicate as _replicate
-except ImportError:  # pragma: no cover
-    _replicate = None
-
-try:
-    from google import genai as _genai
-    from google.genai import types as _genai_types
-except ImportError:  # pragma: no cover
-    _genai = None
-    _genai_types = None
 
 import cv2
 import numpy as np
@@ -119,6 +104,13 @@ RESULTS_DIR.mkdir(parents=True, exist_ok=True)
 for _f in RESULTS_DIR.iterdir():
     if _f.is_file():
         _f.unlink()
+
+from face_aging.aging_service import LocalAgingService
+try:
+    local_aging_service = LocalAgingService()
+except Exception as e:
+    print(f"Failed to load LocalAgingService: {e}")
+    local_aging_service = None
 
 app = Flask(__name__)
 
@@ -5243,146 +5235,21 @@ def api_aging():
 # Replicate aging — FLUX Kontext Pro (image-to-image editing)
 # ---------------------------------------------------------------------------
 
-# Model identifier on Replicate — supports image-to-image editing with a prompt.
-_REPLICATE_MODEL = "black-forest-labs/flux-kontext-pro"
-
-# Prompt template; {degree} is substituted based on intensity.
-_AGING_PROMPT_TEMPLATE = (
-    "Make this person look {degree}. "
-    "Add realistic facial wrinkles, aged skin texture, age spots, and gray hair. "
-    "Keep the same identity, pose, background, and lighting. "
-    "Do not change the face shape dramatically."
-)
-
-
-def call_replicate_aging(image_bytes: bytes, intensity: float = 0.5) -> bytes:
-    """
-    Sends a portrait to the Replicate FLUX Kontext Pro model and returns
-    the aged image as raw bytes.
-
-    The API token is read from the REPLICATE_API_TOKEN environment variable
-    (loaded from .env via load_dotenv at startup).
-    Do NOT hardcode secrets.
-
-    Parameters
-    ----------
-    image_bytes : bytes
-        JPEG-encoded input portrait.
-    intensity : float
-        0.0–1.0 scale controlling how much older the result should look.
-
-    Returns
-    -------
-    bytes
-        Raw bytes of the output image (JPEG or PNG, as returned by Replicate).
-
-    Raises
-    ------
-    EnvironmentError : REPLICATE_API_TOKEN not set.
-    RuntimeError     : replicate package unavailable, API error, or no image returned.
-    """
-    # Re-load .env in case the Flask reloader spawned a fresh process.
-    _env_path = Path(__file__).resolve().parent / ".env"
-    load_dotenv(str(_env_path), override=True)
-
-    api_token = os.environ.get("REPLICATE_API_TOKEN", "").strip()
-    print(f"[call_replicate_aging] REPLICATE_API_TOKEN present: {bool(api_token)}", flush=True)
-    if not api_token:
-        raise EnvironmentError(
-            "REPLICATE_API_TOKEN is not configured. "
-            "Add it to your .env file and restart the server."
-        )
-
-    if _replicate is None:
-        raise RuntimeError(
-            "replicate is not installed. Run: pip install replicate"
-        )
-
-    # Vary the aging degree based on the requested intensity.
-    if intensity >= 0.7:
-        degree = "20-30 years older"
-    elif intensity >= 0.4:
-        degree = "10-20 years older"
-    else:
-        degree = "5-10 years older"
-
-    prompt = _AGING_PROMPT_TEMPLATE.format(degree=degree)
-
-    # Encode the image as a base64 data URI so Replicate accepts it directly.
-    img_b64 = base64.b64encode(image_bytes).decode()
-    img_data_uri = f"data:image/jpeg;base64,{img_b64}"
-
-    print(f"[call_replicate_aging] calling model: {_REPLICATE_MODEL}", flush=True)
-
-    # Instantiate a client with an explicit token — never rely on global state.
-    client = _replicate.Client(api_token=api_token)
-
-    # Run the model.  The output is either a URL string or a list of URL strings.
-    output = client.run(
-        _REPLICATE_MODEL,
-        input={
-            "input_image": img_data_uri,
-            "prompt": prompt,
-        },
-    )
-
-    # Resolve the output URL.
-    if isinstance(output, list):
-        result_url = str(output[0])
-    else:
-        result_url = str(output)
-
-    if not result_url:
-        raise RuntimeError("Replicate returned an empty output URL.")
-
-    print(f"[call_replicate_aging] output URL: {result_url[:80]}...", flush=True)
-
-    # Download the resulting image.
-    if _requests is None:
-        raise RuntimeError("requests is not installed. Run: pip install requests")
-
-    resp = _requests.get(result_url, timeout=120)
-    resp.raise_for_status()
-
-    result_bytes = resp.content
-    if not result_bytes:
-        raise RuntimeError("Replicate returned an empty image body.")
-
-    return result_bytes
-
-
 @app.post("/api/aging-ai")
 def api_aging_ai():
     """
-    AI aging endpoint — routes to Replicate FLUX Kontext Pro (image-to-image).
-
-    This endpoint is separate from /api/aging (classical DSP / Frequency mode)
-    so that the two modes can be tested, deployed, and rate-limited independently.
-
-    Flow
-    ----
-    1. Read and validate the uploaded image.
-    2. Check REPLICATE_API_TOKEN env var — return 503 immediately if missing.
-    3. Forward the image to Replicate via call_replicate_aging().
-    4. Decode the returned bytes, save to results/, return JSON with base64 image.
-
-    Error handling
-    --------------
-    - Missing API key          → 503 + clear message.
-    - API timeout / network    → 502 + message.
-    - Invalid/empty response   → 502 + message.
-    - Bad upload / image       → 400.
+    Local AI aging endpoint.
     """
-    print("AGING AI ENDPOINT CALLED - REPLICATE MODE", flush=True)
-    print("REPLICATE_API_TOKEN available:", bool(os.getenv("REPLICATE_API_TOKEN")), flush=True)
+    print("AGING AI ENDPOINT CALLED - LOCAL MODE", flush=True)
     started = time.perf_counter()
 
-    # ── 1. Read uploaded image ────────────────────────────────────────────────
+    if local_aging_service is None:
+        return _error("Local aging service is not initialized.", 503)
+
     raw_file = request.files.get("image")
     if raw_file is None:
         return _error("No image uploaded.", 400)
 
-    # Keep raw bytes for forwarding; also decode for local metadata.
     image_bytes = raw_file.read()
     if not image_bytes:
         return _error("Uploaded image is empty.", 400)
@@ -5392,47 +5259,39 @@ def api_aging_ai():
     except Exception as exc:
         return _error(f"Could not decode image: {exc}", 400)
 
-    # ── 2. Check API token ────────────────────────────────────────────────────
-    _key_val = os.environ.get("REPLICATE_API_TOKEN", "").strip()
-    print(f"[api_aging_ai] key check: {bool(_key_val)}", flush=True)
-    if not _key_val:
-        msg = "REPLICATE_API_TOKEN is not configured. Add it to your .env file."
-        print(f"[api_aging_ai] returning 503: {msg}", flush=True)
-        return jsonify({"ok": False, "error": msg}), 503
-
     try:
         strength = _clamp(float(request.form.get("strength", 0.5)), 0.0, 1.0)
         mode     = (request.form.get("mode", "aging") or "aging").strip().lower()
-        years    = max(-50, min(50, int(float(request.form.get("years", 10)))))
+        years    = max(-80, min(80, int(float(request.form.get("years", 10)))))
     except ValueError:
         return _error("Invalid aging parameters.", 400)
 
     if mode not in {"aging", "deaging"}:
         return _error("Invalid mode. Use 'aging' or 'deaging'.", 400)
 
-    # ── 3. Call Replicate image-editing API ───────────────────────────────────
-    try:
-        result_bytes = call_replicate_aging(image_bytes, intensity=strength)
-    except EnvironmentError as exc:
-        print(f"[api_aging_ai] EnvironmentError: {exc}", flush=True)
-        return jsonify({"ok": False, "error": str(exc)}), 503
-    except RuntimeError as exc:
-        print(f"[api_aging_ai] RuntimeError: {exc}", flush=True)
-        return jsonify({"ok": False, "error": str(exc)}), 502
-    except Exception as exc:
-        print(f"[api_aging_ai] Unexpected error: {exc}", flush=True)
-        return jsonify({"ok": False, "error": f"Unexpected Replicate aging error: {exc}"}), 500
+    req_base_age = request.form.get("baseAge") or request.form.get("current_age")
+    if req_base_age:
+        apparent_age_before = int(float(req_base_age))
+    else:
+        apparent_age_before = _estimate_base_age(image)
+        
+    # Local AI explicitly avoids the classical shrinkage so target age can reach 80+
+    requested_years = abs(int(years))
+    signed_years = requested_years if mode == "aging" else -requested_years
+    apparent_age_after = int(round(_clamp(apparent_age_before + signed_years, 1.0, 99.0)))
 
-    # ── 4. Decode result, save, return ────────────────────────────────────────
+    # Local Inference
     try:
-        arr = np.frombuffer(result_bytes, dtype=np.uint8)
-        out = cv2.imdecode(arr, cv2.IMREAD_COLOR)
-        if out is None:
-            raise ValueError("Could not decode AI aging result as an image.")
+        out = local_aging_service.run_inference(
+            image,
+            target_age=apparent_age_after,
+            current_age=apparent_age_before,
+        )
     except Exception as exc:
-        return jsonify({"ok": False, "error": f"AI aging result is not a valid image: {exc}"}), 502
+        print(f"[api_aging_ai] Inference error: {exc}", flush=True)
+        return jsonify({"ok": False, "error": str(exc)}), 500
 
-    # Resize to match input dimensions if the API changed them.
+    # Resize to match input dimensions
     if out.shape[:2] != image.shape[:2]:
         out = cv2.resize(out, (image.shape[1], image.shape[0]), interpolation=cv2.INTER_CUBIC)
 
@@ -5441,14 +5300,9 @@ def api_aging_ai():
     except ValueError as exc:
         return _error(str(exc), 500)
 
-    saved      = _save_image(out, "aging-ai")
+    saved = _save_image(out, "aging-ai-local")
     elapsed_ms = (time.perf_counter() - started) * 1000.0
-
-    # Build image_url from saved path (relative to RESULTS_DIR).
     image_url = f"/results/{Path(saved).name}" if saved else None
-
-    apparent_age_before = _estimate_base_age(image)
-    apparent_age_after  = _apparent_age_after(apparent_age_before, mode, years, strength)
 
     return jsonify({
         "ok":                True,
@@ -5457,13 +5311,12 @@ def api_aging_ai():
         "method":            "ai",
         "mode":              mode,
         "years":             years,
-        "modelStatus":       "replicate-flux-kontext-pro",
+        "modelStatus":       "local-sam-ffhq",
         "apparentAgeBefore": apparent_age_before,
         "apparentAgeAfter":  apparent_age_after,
         "saved":             saved,
         "durationMs":        round(elapsed_ms, 2),
     })
-
 
 @app.post("/api/transform")
 def api_transform():
