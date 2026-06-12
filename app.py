@@ -48,17 +48,11 @@ from dotenv import load_dotenv
 # Startup environment check — runs once when the server starts.
 # Uses __file__ so the path is always relative to app.py, not the CWD.
 # This prevents Flask's reloader child process from missing the .env file.
-# The actual key value is never printed for security reasons.
 # ---------------------------------------------------------------------------
 print("CWD:", os.getcwd())
 _env_path = Path(__file__).resolve().parent / ".env"  # always next to app.py
 print(".env exists:", _env_path.exists())
 load_dotenv(str(_env_path), override=True)  # override=True ensures reloader re-applies it
-_replicate_key_check = os.getenv("REPLICATE_API_TOKEN", "").strip()
-print("REPLICATE_API_TOKEN loaded:", bool(_replicate_key_check))
-if not _replicate_key_check:
-    print("WARNING: REPLICATE_API_TOKEN is not set or not loaded!")
-del _replicate_key_check  # don't leave the key value dangling in module scope
 # ---------------------------------------------------------------------------
 
 
@@ -3757,6 +3751,11 @@ def uploads_file(filename):
     return send_from_directory(UPLOAD_DIR, filename)
 
 
+@app.get("/models/<path:filename>")
+def models_file(filename):
+    return send_from_directory(MODELS_DIR, filename)
+
+
 @app.get("/api/health")
 def api_health():
     return jsonify({"ok": True, "service": "FaceWarp DSP API", "timestamp": time.time()})
@@ -4205,17 +4204,10 @@ def api_aging():
 
 
 # ---------------------------------------------------------------------------
-# AI aging — Replicate image-editing helper
+# AI aging — Local AI Model
 # ---------------------------------------------------------------------------
-# Frequency mode (method="freq") uses the local classical DSP pipeline:
-#   HPF amplification, CLAHE, hair greying — runs entirely locally.
-# AI mode (method="ai") sends the image to the Replicate API for AI-based aging.
-#   Requires REPLICATE_API_TOKEN in the .env file (never hardcoded).
-#   Uses FLUX Kontext Pro on Replicate for high-quality image-to-image face aging.
+# Runs local SAM-FFHQ based image-to-image face aging.
 
-# ---------------------------------------------------------------------------
-# Replicate aging — FLUX Kontext Pro (image-to-image editing)
-# ---------------------------------------------------------------------------
 
 @app.post("/api/aging-ai")
 def api_aging_ai():

@@ -3,7 +3,6 @@ numpy==2.4.4
 opencv-python==4.13.0.92
 requests==2.33.1
 google-genai==1.74.0
-replicate>=0.34.0
 python-dotenv==1.2.2
 # mediapipe==0.10.35  # Python 3.13 desteklemiyor; Python <=3.12 ile kullanın.
 # Uygulama mediapipe olmadan Haar cascade fallback ile çalışır.

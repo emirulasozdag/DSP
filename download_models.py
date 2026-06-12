@@ -1,5 +1,8 @@
 import os
 import sys
+import urllib.request
+import bz2
+from pathlib import Path
 
 def download_aging_model():
     models_dir = "models"
@@ -18,18 +21,10 @@ def download_aging_model():
     print("Note: This file is approximately 2.27 GB in size.")
     print("=" * 60)
     
-    # Google Drive File ID for downloading the model automatically
     gdrive_file_id = "1QTK-O0xoUZavCUCno-YKxIhsbXSGY5ia"
     
     if gdrive_file_id == "YOUR_GOOGLE_DRIVE_FILE_ID_HERE":
         print("\nError: Google Drive File ID (gdrive_file_id) is not set!")
-        print("Please follow these steps:")
-        print("1. Upload 'models/aging.pt' (2.27 GB) to your own Google Drive / Dropbox / Hugging Face.")
-        print("2. Create a public shareable link.")
-        print("3. Download it and place it in the 'models/' directory as 'aging.pt'.")
-        print("\nAlternatively:")
-        print("Put your Google Drive file ID in the 'gdrive_file_id' variable inside this script")
-        print("and run 'python download_models.py' to download it automatically.")
         return
 
     try:
@@ -44,5 +39,50 @@ def download_aging_model():
         print(f"\nAn error occurred during download: {e}")
         print("Please download the file manually and place it as 'models/aging.pt'.")
 
+def download_dlib_model():
+    models_dir = Path("models")
+    dat_path = models_dir / "shape_predictor_68_face_landmarks.dat"
+    bz2_path = models_dir / "shape_predictor_68_face_landmarks.dat.bz2"
+    model_url = "http://dlib.net/files/shape_predictor_68_face_landmarks.dat.bz2"
+    
+    if dat_path.exists():
+        print(f"[✓] {dat_path} already exists. Skipping dlib download.")
+        return
+
+    print("=" * 60)
+    print("Downloading dlib 68-Point Face Landmark Model...")
+    print("Note: This file is approximately 99 MB (compressed 64 MB).")
+    print("=" * 60)
+    
+    models_dir.mkdir(parents=True, exist_ok=True)
+    
+    try:
+        def report_hook(block_num, block_size, total_size):
+            downloaded = block_num * block_size
+            if total_size > 0:
+                percent = downloaded * 100 / total_size
+                print(f"\rDownloading: {percent:.2f}% ({downloaded}/{total_size} bytes)", end="", flush=True)
+            else:
+                print(f"\rDownloading: {downloaded} bytes", end="", flush=True)
+
+        urllib.request.urlretrieve(model_url, bz2_path, reporthook=report_hook)
+        print("\n[✓] dlib model download completed successfully.")
+        
+        print("Extracting bz2 archive...")
+        with bz2.BZ2File(bz2_path) as fr, open(dat_path, "wb") as fw:
+            data = fr.read()
+            fw.write(data)
+        print(f"[✓] Extraction completed. Model saved at: {dat_path}")
+        
+    except Exception as e:
+        print(f"\nError occurred during dlib download/extraction: {e}")
+        if dat_path.exists():
+            dat_path.unlink()
+    finally:
+        if bz2_path.exists():
+            bz2_path.unlink()
+
 if __name__ == "__main__":
     download_aging_model()
+    print()
+    download_dlib_model()

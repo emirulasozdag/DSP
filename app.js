@@ -1415,13 +1415,13 @@ const trackingAlphaEl = $('#trackingAlpha');
 const trackingFreshnessEl = $('#trackingFreshness');
 
 const GLASSES_WIDTH_FACTOR_WEB = 2.45;
-const HAT_WIDTH_FACTOR_WEB = 1.55;
-const HAT_Y_OFFSET_FACTOR_WEB = -0.45;
+const HAT_WIDTH_FACTOR_WEB = 1.88;
+const HAT_Y_OFFSET_FACTOR_WEB = -0.33;
 const HAT_BOTTOM_ALIGNMENT_WEB = 0.55;
-const FAST_SMOOTHING_ALPHA = 0.65;
-const SLOW_SMOOTHING_ALPHA = 0.35;
-const LANDMARK_POLL_MS = 105;
-const LANDMARK_STALE_MS = 260;
+const FAST_SMOOTHING_ALPHA = 0.92;
+const SLOW_SMOOTHING_ALPHA = 0.72;
+const LANDMARK_POLL_MS = 50;
+const LANDMARK_STALE_MS = 600;
 const LIPSTICK_OUTER_LANDMARKS = [61, 185, 40, 39, 37, 0, 267, 269, 270, 409, 291, 375, 321, 405, 314, 17, 84, 181, 91, 146];
 const LIPSTICK_INNER_LANDMARKS = [78, 191, 80, 81, 82, 13, 312, 311, 310, 415, 308, 324, 318, 402, 317, 14, 87, 178, 88, 95];
 const BLUSH_LEFT_LANDMARKS = [50, 117, 118, 119, 123, 187];
@@ -1540,6 +1540,74 @@ const accessoryState = {
     item.image.src = item.src;
   });
 });
+
+/* ── Client-side MediaPipe FaceLandmarker (zero-latency tracking) ────── */
+let _mpLandmarker = null;
+let _mpState = 'idle'; // idle | loading | ready | failed
+let _mpLastDetectAt = 0;
+const _MP_DETECT_INTERVAL_MS = 33; // ~30 FPS detection (render stays 60 FPS)
+
+async function _initClientLandmarker() {
+  if (_mpState !== 'idle') return;
+  _mpState = 'loading';
+  console.log('[Webcam] Loading client-side FaceLandmarker…');
+  try {
+    const vision = await import(
+      'https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.22/vision_bundle.mjs'
+    );
+    const fileset = await vision.FilesetResolver.forVisionTasks(
+      'https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.22/wasm'
+    );
+    const modelResp = await fetch('/models/face_landmarker.task');
+    if (!modelResp.ok) throw new Error('Model file not found at /models/face_landmarker.task');
+    const modelBuf = await modelResp.arrayBuffer();
+    _mpLandmarker = await vision.FaceLandmarker.createFromOptions(fileset, {
+      baseOptions: { modelAssetBuffer: new Uint8Array(modelBuf), delegate: 'GPU' },
+      runningMode: 'VIDEO',
+      numFaces: 1,
+      outputFaceBlendshapes: false,
+      outputFacialTransformationMatrixes: false,
+    });
+    _mpState = 'ready';
+    // Stop server polling — client-side is now active
+    if (accessoryState.timer) { clearInterval(accessoryState.timer); accessoryState.timer = null; }
+    console.log('[Webcam] ✓ Client-side FaceLandmarker ready — server polling stopped');
+  } catch (err) {
+    console.warn('[Webcam] Client-side init failed, using server fallback:', err);
+    _mpState = 'failed';
+  }
+}
+
+function _detectLocal() {
+  if (_mpState !== 'ready' || !_mpLandmarker) return false;
+  if (!webcamVideo || !webcamVideo.videoWidth || !webcamVideo.videoHeight) return false;
+
+  const now = performance.now();
+  if (now - _mpLastDetectAt < _MP_DETECT_INTERVAL_MS) return true; // throttled — keep last result
+  _mpLastDetectAt = now;
+
+  try {
+    const results = _mpLandmarker.detectForVideo(webcamVideo, now);
+    if (!results.faceLandmarks || results.faceLandmarks.length === 0) return false;
+
+    const w = webcamVideo.videoWidth;
+    const h = webcamVideo.videoHeight;
+    const raw = results.faceLandmarks[0];
+    const points = new Array(raw.length);
+    for (let i = 0; i < raw.length; i++) {
+      points[i] = { id: i, x: raw[i].x * w, y: raw[i].y * h };
+    }
+
+    const meas = getAccessoryMeasurements({ rawLandmarks: points, landmarks: points });
+    if (!meas) return false;
+
+    accessoryState.lastLatencyMs = performance.now() - now;
+    accessoryState.lastLandmarkAt = performance.now();
+    accessoryState.measurements = meas;
+    accessoryState.smoothed = smoothAccessoryMeasurements(accessoryState.smoothed, meas);
+    return true;
+  } catch (_) { return false; }
+}
 
 function accessoriesReady() {
   return accessoryState.loadedImages >= accessoryState.totalImages;
@@ -1784,6 +1852,7 @@ function getAccessoryMeasurements(data) {
   if (points.length >= 468) {
     leftEye = avgPoints(points, [33, 133]);
     rightEye = avgPoints(points, [362, 263]);
+    const rawEyeCenterX = (Number(leftEye.x) + Number(rightEye.x)) / 2;
     noseBridge = avgPoints(points, [168, 6, 197]);
     forehead = avgPoints(points, [10, 151, 109, 338]);
     const leftCheek = points[234];
@@ -1795,9 +1864,9 @@ function getAccessoryMeasurements(data) {
     faceHeight = dist2d(forehead, chin);
     const faceCenter = { x: (Number(leftCheek.x) + Number(rightCheek.x)) / 2, y: (Number(leftCheek.y) + Number(rightCheek.y)) / 2 };
     yaw = (Number(noseTip.x) - faceCenter.x) / Math.max(faceWidth, 1);
-    earringLeft = { x: Number(leftCheek.x) - faceWidth * 0.12, y: Number(leftCheek.y) + faceHeight * 0.03 };
-    earringRight = { x: Number(rightCheek.x) + faceWidth * 0.12, y: Number(rightCheek.y) + faceHeight * 0.03 };
-    necklaceAnchor = { x: Number(chin.x), y: Number(chin.y) + faceHeight * 0.23 };
+    earringLeft = { x: Number(leftCheek.x) - faceWidth * 0.07, y: Number(leftCheek.y) + faceHeight * 0.12 };
+    earringRight = { x: Number(rightCheek.x) + faceWidth * 0.07, y: Number(rightCheek.y) + faceHeight * 0.12 };
+    necklaceAnchor = { x: (Number(chin.x) * 0.20) + (rawEyeCenterX * 0.80), y: Number(chin.y) + faceHeight * 0.28 };
     blushLeftAnchors = pointList(points, BLUSH_LEFT_LANDMARKS);
     blushRightAnchors = pointList(points, BLUSH_RIGHT_LANDMARKS);
     blushLeft = avgPoints(points, BLUSH_LEFT_LANDMARKS);
@@ -1813,7 +1882,8 @@ function getAccessoryMeasurements(data) {
     // but it still gives stable eye, brow, and jaw locations for the demo.
     leftEye = avgPoints(points, [36, 37, 38, 39, 40, 41]);
     rightEye = avgPoints(points, [42, 43, 44, 45, 46, 47]);
-    noseBridge = avgPoints(points, [27, 28, 29, 30]);
+    const rawEyeCenterX = (Number(leftEye.x) + Number(rightEye.x)) / 2;
+    noseBridge = avgPoints(points, [27, 28]);
     const leftBrow = avgPoints(points, [17, 18, 19, 20, 21]);
     const rightBrow = avgPoints(points, [22, 23, 24, 25, 26]);
     const leftJaw = points[0];
@@ -1826,13 +1896,13 @@ function getAccessoryMeasurements(data) {
       x: (Number(leftBrow.x) + Number(rightBrow.x)) / 2,
       y: (Number(leftBrow.y) + Number(rightBrow.y)) / 2,
     };
-    forehead = { x: browCenter.x, y: browCenter.y - (faceWidth * 0.18) };
+    forehead = { x: browCenter.x, y: browCenter.y - (faceWidth * 0.26) };
     faceHeight = dist2d(forehead, chin);
     const faceCenter = { x: (Number(leftJaw.x) + Number(rightJaw.x)) / 2, y: (Number(leftJaw.y) + Number(rightJaw.y)) / 2 };
     yaw = (Number(noseTip.x) - faceCenter.x) / Math.max(faceWidth, 1);
-    earringLeft = { x: Number(leftJaw.x) - faceWidth * 0.08, y: Number(leftEye.y) + faceHeight * 0.22 };
-    earringRight = { x: Number(rightJaw.x) + faceWidth * 0.08, y: Number(rightEye.y) + faceHeight * 0.22 };
-    necklaceAnchor = { x: Number(chin.x), y: Number(chin.y) + faceHeight * 0.24 };
+    earringLeft = { x: Number(leftJaw.x) - faceWidth * 0.02, y: Number(leftJaw.y) };
+    earringRight = { x: Number(rightJaw.x) + faceWidth * 0.02, y: Number(rightJaw.y) };
+    necklaceAnchor = { x: (Number(chin.x) * 0.20) + (rawEyeCenterX * 0.80), y: Number(chin.y) + faceHeight * 0.30 };
     blushLeft = avgPoints(points, [2, 3, 31]) || leftJaw;
     blushRight = avgPoints(points, [13, 14, 35]) || rightJaw;
     blushLeftAnchors = [];
@@ -2045,7 +2115,10 @@ function drawAccessoriesOnContext(ctx, measurements) {
   const lipstickIndex = accessoryState.selected.lipstick;
   if (lipstickIndex !== null && measurements.hasPreciseMakeup) {
     const lipstick = FILTER_CATALOG.lipstick[lipstickIndex];
-    drawLipstickMask(ctx, measurements.lipOuter, measurements.lipInner, lipstick.color, LIPSTICK_OPACITY, LIPSTICK_BLUR, lipstick.stroke);
+    const yawAbs = Math.abs(measurements.yaw || 0);
+    const lipstickOpacity = LIPSTICK_OPACITY * (1 - (yawAbs * 0.40));
+    const lipstickBlur = LIPSTICK_BLUR + (yawAbs * 4);
+    drawLipstickMask(ctx, measurements.lipOuter, measurements.lipInner, lipstick.color, lipstickOpacity, lipstickBlur, lipstick.stroke);
   }
 
   const blushIndex = accessoryState.selected.blush;
@@ -2068,9 +2141,9 @@ function drawAccessoriesOnContext(ctx, measurements) {
     const glasses = FILTER_CATALOG.glasses[glassesIndex].image;
     const glassesW = measurements.eyeDistance * GLASSES_WIDTH_FACTOR_WEB;
     const glassesH = glassesW * (glasses.naturalHeight / glasses.naturalWidth);
-    const yawShift = (Number(measurements.yaw) || 0) * measurements.eyeDistance * 0.28;
-    const anchorX = (measurements.eyeCenter.x * 0.62) + (measurements.noseBridge.x * 0.38) + yawShift;
-    const anchorY = (measurements.eyeCenter.y * 0.62) + (measurements.noseBridge.y * 0.38) - (glassesH * 0.05);
+    const yawShift = (Number(measurements.yaw) || 0) * measurements.eyeDistance * 0.16;
+    const anchorX = measurements.eyeCenter.x + yawShift;
+    const anchorY = measurements.eyeCenter.y + (glassesH * 0.04);
     drawYawWarpedImage(ctx, glasses, anchorX, anchorY, glassesW, glassesH, measurements.roll, measurements.yaw);
   }
 
@@ -2082,7 +2155,9 @@ function drawAccessoriesOnContext(ctx, measurements) {
     const hatY = measurements.forehead.y
       - (hatH * HAT_BOTTOM_ALIGNMENT_WEB)
       + (measurements.faceHeight * HAT_Y_OFFSET_FACTOR_WEB);
-    drawRotatedImage(ctx, hat, measurements.forehead.x, hatY + (hatH / 2), hatW, hatH, measurements.roll);
+    const hatYawShift = (Number(measurements.yaw) || 0) * measurements.faceWidth * 0.26;
+    const hatX = measurements.forehead.x + hatYawShift;
+    drawYawWarpedImage(ctx, hat, hatX, hatY + (hatH / 2), hatW, hatH, measurements.roll, measurements.yaw);
   }
 
   const earringsIndex = accessoryState.selected.earrings;
@@ -2090,8 +2165,28 @@ function drawAccessoriesOnContext(ctx, measurements) {
     const earrings = FILTER_CATALOG.earrings[earringsIndex].image;
     const earringH = measurements.faceHeight * 0.24;
     const earringW = earringH * (earrings.naturalWidth / earrings.naturalHeight);
-    drawRotatedImage(ctx, earrings, measurements.earringLeft.x, measurements.earringLeft.y, earringW, earringH, measurements.roll * 0.45);
-    drawRotatedImage(ctx, earrings, measurements.earringRight.x, measurements.earringRight.y, earringW, earringH, measurements.roll * 0.45);
+    const yaw = measurements.yaw || 0;
+    
+    let leftOpacity = 1.0;
+    let rightOpacity = 1.0;
+    if (yaw > 0) {
+      rightOpacity = Math.max(0, 1 - (yaw * 3.8));
+    } else {
+      leftOpacity = Math.max(0, 1 - (Math.abs(yaw) * 3.8));
+    }
+
+    if (leftOpacity > 0.05) {
+      ctx.save();
+      ctx.globalAlpha = leftOpacity;
+      drawRotatedImage(ctx, earrings, measurements.earringLeft.x, measurements.earringLeft.y, earringW, earringH, measurements.roll * 0.45);
+      ctx.restore();
+    }
+    if (rightOpacity > 0.05) {
+      ctx.save();
+      ctx.globalAlpha = rightOpacity;
+      drawRotatedImage(ctx, earrings, measurements.earringRight.x, measurements.earringRight.y, earringW, earringH, measurements.roll * 0.45);
+      ctx.restore();
+    }
   }
 
   const necklaceIndex = accessoryState.selected.necklace;
@@ -2111,6 +2206,9 @@ function drawAccessoryOverlay() {
   const height = webcamVideo.videoHeight || 480;
   if (accessoryCanvas.width !== width) accessoryCanvas.width = width;
   if (accessoryCanvas.height !== height) accessoryCanvas.height = height;
+
+  // Client-side detection: runs at ~30 FPS, throttled inside _detectLocal()
+  if (_mpState === 'ready') _detectLocal();
 
   const now = performance.now();
   accessoryState.frameCount += 1;
@@ -2144,6 +2242,8 @@ function drawVisibleWebcamFrame(ctx, width, height) {
 }
 
 async function updateAccessoryLandmarks() {
+  // Skip server round-trip when client-side detection is active
+  if (_mpState === 'ready') return;
   if (accessoryState.processing || !webcamStream || !webcamVideo || !webcamCanvas) {
     updateTrackingDebug();
     return;
@@ -2189,7 +2289,10 @@ async function updateAccessoryLandmarks() {
 function startAccessoryFilter() {
   if (!accessoryCanvas) return;
   if (!accessoryState.raf) accessoryState.raf = requestAnimationFrame(drawAccessoryOverlay);
-  if (!accessoryState.timer) {
+  // Begin client-side FaceLandmarker init (async, non-blocking)
+  if (_mpState === 'idle') _initClientLandmarker();
+  // Server polling as fallback while client-side loads (or if it fails)
+  if (_mpState !== 'ready' && !accessoryState.timer) {
     updateAccessoryLandmarks();
     accessoryState.timer = setInterval(updateAccessoryLandmarks, LANDMARK_POLL_MS);
   }
@@ -2203,6 +2306,7 @@ function stopAccessoryFilter() {
   accessoryState.smoothed = null;
   accessoryState.lastLatencyMs = null;
   accessoryState.lastLandmarkAt = 0;
+  _mpLastDetectAt = 0;
   updateTrackingDebug(true);
   if (accessoryCanvas) {
     const ctx = accessoryCanvas.getContext('2d');
@@ -2213,6 +2317,8 @@ function stopAccessoryFilter() {
 /* ═══════════════════ WEBCAM ═══════════════════ */
 
 function startWebcam() {
+  // Begin client-side FaceLandmarker init early for faster startup
+  if (_mpState === 'idle') _initClientLandmarker();
   if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
     toast('Webcam is not supported in this browser.', 'warning');
     return;

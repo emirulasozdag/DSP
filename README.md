@@ -83,9 +83,9 @@ python -m pip install -r requirements.txt
 python app.py
 ```
 
-### Local AI Aging (PyTorch & SAM) Setup
+### Local AI Aging & dlib Setup
 
-To ensure that the Local AI Aging feature runs smoothly on another computer, you need to configure the large files and repositories that are ignored in `.gitignore`:
+To ensure that the Local AI Aging and dlib landmark tracking features run smoothly on another computer, you need to configure the large files and repositories that are ignored in `.gitignore`:
 
 1. **PyTorch & Torchvision Installation:**
    PyTorch is not included in `requirements.txt` because the installation command depends on the operating system and CUDA (GPU) support. Run one of the following commands in the terminal of the target computer based on your hardware:
@@ -93,20 +93,27 @@ To ensure that the Local AI Aging feature runs smoothly on another computer, you
      ```bash
      pip install torch torchvision --index-url https://download.pytorch.org/whl/cpu
      ```
-   * **NVIDIA GPU (for fast CUDA 12.1 execution):**
+   * **NVIDIA GPU (for fast CUDA execution - CUDA 12.8 / 12.1 recommended):**
      ```bash
-     pip install torch torchvision --index-url https://download.pytorch.org/whl/cu121
+     pip install torch torchvision --index-url https://download.pytorch.org/whl/cu128
      ```
 
-2. **Download `aging.pt` Model Weights (2.27 GB):**
-   Due to GitHub's 100MB file size limit, `models/aging.pt` is not included in the repository.
-   * **Manual Installation:** Upload the `models/aging.pt` file to your own cloud storage (Google Drive, Hugging Face, Dropbox, etc.). Download it on the new machine and place it inside the `models/` directory as `aging.pt`.
-   * **Automatic Installation (gdown):** The `download_models.py` script already has the Google Drive File ID configured. Simply run:
-     ```bash
-     python download_models.py
-     ```
+2. **dlib Installation (Windows):**
+   To avoid compilation errors on Windows (especially with Python 3.14+), download and install the precompiled dlib wheel:
+   ```bash
+   pip install https://github.com/sachadee/Dlib/raw/main/dlib-20.0.0-cp314-cp314-win_amd64.whl
+   ```
 
-3. **`sam_repo` Automatic Setup:**
+3. **Download Model Weights (aging.pt & dlib shape predictor):**
+   Due to GitHub's file size limits, large models (`models/aging.pt` - 2.27 GB and `models/shape_predictor_68_face_landmarks.dat` - 99.6 MB) are not included in the repository.
+   
+   You can download all required models automatically by running:
+   ```bash
+   python download_models.py
+   ```
+   *(Note: `face_landmarker.task` is already included directly in the Git repository as it is small).*
+
+4. **`sam_repo` Automatic Setup:**
    Ensure that `git` is installed on the target computer. When the project runs for the first time, `face_aging/aging_service.py` will automatically clone the `sam_repo` directory from GitHub. If the target machine is offline, you can manually zip your local `sam_repo` folder and extract it to the project root directory.
 
 If macOS blocks the webcam, allow camera access for your terminal or IDE:
