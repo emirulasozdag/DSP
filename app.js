@@ -116,6 +116,10 @@ function loadImageFromDataUrl(dataUrl) {
 }
 
 async function getCurrentImageBlob() {
+  // If the pipeline image has been updated (e.g. after preprocessing), always
+  // use the updated appState.imageDataUrl so that downstream steps (landmarks,
+  // expression, aging) operate on the processed image, not the original file.
+  if (appState.pipelineUpdated && appState.imageDataUrl) return dataUrlToBlob(appState.imageDataUrl);
   const directFile = fileInput?.files?.[0];
   if (directFile) return directFile;
   if (!appState.imageDataUrl) return null;
@@ -756,6 +760,7 @@ async function fetchAnalysisFromBackend(force = false) {
 function setPipelineImage(dataUrl, meta = {}) {
   // Fix: '' || old would keep old URL when removing. Use typeof check so empty string clears correctly.
   appState.imageDataUrl = typeof dataUrl === 'string' ? dataUrl : appState.imageDataUrl;
+  appState.pipelineUpdated = true;
   appState.fileName = meta.fileName || appState.fileName;
   appState.format = meta.format || appState.format;
   appState.sizeText = meta.sizeText || appState.sizeText;
@@ -1032,6 +1037,7 @@ function handleFile(file) {
         sizeText: (file.size / (1024 * 1024)).toFixed(2) + ' MB',
         dimensions: img.width + ' × ' + img.height,
       });
+      appState.pipelineUpdated = false;  // fresh upload — use direct file until pipeline runs
       backendState.landmarksLoaded = false;
       backendState.analysisLoaded = false;
       backendState.lastExprDataUrl = '';
@@ -1422,17 +1428,6 @@ const FAST_SMOOTHING_ALPHA = 0.92;
 const SLOW_SMOOTHING_ALPHA = 0.72;
 const LANDMARK_POLL_MS = 50;
 const LANDMARK_STALE_MS = 600;
-const LIPSTICK_OUTER_LANDMARKS = [61, 185, 40, 39, 37, 0, 267, 269, 270, 409, 291, 375, 321, 405, 314, 17, 84, 181, 91, 146];
-const LIPSTICK_INNER_LANDMARKS = [78, 191, 80, 81, 82, 13, 312, 311, 310, 415, 308, 324, 318, 402, 317, 14, 87, 178, 88, 95];
-const BLUSH_LEFT_LANDMARKS = [50, 117, 118, 119, 123, 187];
-const BLUSH_RIGHT_LANDMARKS = [280, 346, 347, 348, 352, 411];
-const LIPSTICK_OPACITY = 0.72;
-const LIPSTICK_BLUR = 2;
-const BLUSH_OPACITY = 0.58;
-const BLUSH_BLUR = 14;
-const BLUSH_X_OFFSET = 0.045;
-const BLUSH_Y_OFFSET = 0.040;
-const BLUSH_SCALE = 1.45;
 
 const FILTER_CATALOG = {
   glasses: [
@@ -1451,26 +1446,17 @@ const FILTER_CATALOG = {
     { name: 'Fedora', src: '/assets/hat_6.png', image: new Image() },
   ],
   earrings: [
-    { name: 'Model 1', src: '/assets/earring_1.png', image: new Image() },
-    { name: 'Model 2', src: '/assets/earring_2.png', image: new Image() },
-    { name: 'Model 3', src: '/assets/earring_3.png', image: new Image() },
+    { name: 'Hoop', src: '/assets/earring_1.png', image: new Image(), colors: [{ name: 'Gold', hue: 40 }, { name: 'Silver', hue: 200 }, { name: 'Rose', hue: 340 }, { name: 'Black', hue: 0, saturate: 0 }] },
+    { name: 'Drop', src: '/assets/earring_2.png', image: new Image(), colors: [{ name: 'Gold', hue: 40 }, { name: 'Silver', hue: 200 }, { name: 'Rose', hue: 340 }, { name: 'Black', hue: 0, saturate: 0 }] },
+    { name: 'Stud', src: '/assets/earring_3.png', image: new Image(), colors: [{ name: 'Gold', hue: 40 }, { name: 'Silver', hue: 200 }, { name: 'Rose', hue: 340 }, { name: 'Black', hue: 0, saturate: 0 }] },
   ],
   necklace: [
-    { name: 'Model 1', src: '/assets/necklace_1.png', image: new Image() },
-    { name: 'Model 2', src: '/assets/necklace_2.png', image: new Image() },
-    { name: 'Model 3', src: '/assets/necklace_3.png', image: new Image() },
+    { name: 'Choker', src: '/assets/necklace_1.png', image: new Image(), colors: [{ name: 'Gold', hue: 40 }, { name: 'Silver', hue: 200 }, { name: 'Rose', hue: 340 }, { name: 'Black', hue: 0, saturate: 0 }] },
+    { name: 'Chain', src: '/assets/necklace_2.png', image: new Image(), colors: [{ name: 'Gold', hue: 40 }, { name: 'Silver', hue: 200 }, { name: 'Rose', hue: 340 }, { name: 'Black', hue: 0, saturate: 0 }] },
+    { name: 'Pendant', src: '/assets/necklace_3.png', image: new Image(), colors: [{ name: 'Gold', hue: 40 }, { name: 'Silver', hue: 200 }, { name: 'Rose', hue: 340 }, { name: 'Black', hue: 0, saturate: 0 }] },
   ],
-  lipstick: [
-    { name: 'Red', color: 'rgba(190, 24, 62, 0.90)', stroke: 'rgba(255, 210, 220, 0.40)' },
-    { name: 'Pink', color: 'rgba(236, 72, 153, 0.85)', stroke: 'rgba(255, 220, 240, 0.38)' },
-    { name: 'Nude', color: 'rgba(178, 112, 90, 0.80)', stroke: 'rgba(255, 235, 225, 0.35)' },
-    { name: 'Berry', color: 'rgba(126, 34, 98, 0.90)', stroke: 'rgba(255, 210, 240, 0.38)' },
-  ],
-  blush: [
-    { name: 'Pink', color: 'rgba(244, 114, 182, 0.90)' },
-    { name: 'Peach', color: 'rgba(251, 146, 60, 0.88)' },
-    { name: 'Coral', color: 'rgba(248, 113, 113, 0.90)' },
-  ],
+  lipstick: [],
+  blush: [],
 };
 
 const CATEGORY_TREE = {
@@ -1483,13 +1469,6 @@ const CATEGORY_TREE = {
       { key: 'necklace', label: 'Necklace', hint: 'Lower chin / neck' },
     ],
   },
-  makeup: {
-    title: 'Makeup',
-    subcategories: [
-      { key: 'lipstick', label: 'Lipstick', hint: 'Lip landmark color' },
-      { key: 'blush', label: 'Blush', hint: 'Cheek color wash' },
-    ],
-  },
 };
 
 const SUBCATEGORY_LABELS = {
@@ -1497,8 +1476,6 @@ const SUBCATEGORY_LABELS = {
   hat: 'Hats',
   earrings: 'Earrings',
   necklace: 'Necklace',
-  lipstick: 'Lipstick',
-  blush: 'Blush',
 };
 
 const accessoryState = {
@@ -1527,10 +1504,12 @@ const accessoryState = {
     hat: null,
     earrings: null,
     necklace: null,
-    lipstick: null,
-    blush: null,
   },
-  debugMakeup: false,
+  selectedColor: {
+    earrings: 0,
+    necklace: 0,
+  },
+  showFavoritesOnly: false,
   mirror: false,
 };
 
@@ -1613,15 +1592,45 @@ function accessoriesReady() {
   return accessoryState.loadedImages >= accessoryState.totalImages;
 }
 
+/* ── Favourites (localStorage) ──────────────────────────────────────────── */
+function _favKey() { return 'tryon_favorites_v1'; }
+function getFavorites() {
+  try { return JSON.parse(localStorage.getItem(_favKey()) || '{}'); } catch { return {}; }
+}
+function isFavorite(kind, index) {
+  const favs = getFavorites();
+  return Boolean(favs[`${kind}_${index}`]);
+}
+function toggleFavorite(kind, index) {
+  const favs = getFavorites();
+  const k = `${kind}_${index}`;
+  if (favs[k]) delete favs[k]; else favs[k] = true;
+  try { localStorage.setItem(_favKey(), JSON.stringify(favs)); } catch { }
+}
+
+/* ── Color filter string for earrings/necklace ──────────────────────────── */
+function colorFilterString(kind, colorIndex) {
+  const item = FILTER_CATALOG[kind]?.[accessoryState.selected[kind]];
+  if (!item || !item.colors) return '';
+  const col = item.colors[colorIndex ?? 0];
+  if (!col) return '';
+  const saturate = col.saturate === 0 ? 'saturate(0)' : '';
+  return `hue-rotate(${col.hue}deg) ${saturate}`.trim();
+}
+
 function setCatalogView(level, category = null, subcategory = null) {
   accessoryState.menuLevel = level;
   accessoryState.category = category;
   accessoryState.subcategory = subcategory;
+  if (level !== 'items') accessoryState.showFavoritesOnly = false;
   renderTryOnCatalog();
 }
 
 function clearTryOnFilters() {
   Object.keys(accessoryState.selected).forEach(key => { accessoryState.selected[key] = null; });
+  accessoryState.selectedColor.earrings = 0;
+  accessoryState.selectedColor.necklace = 0;
+  accessoryState.showFavoritesOnly = false;
   updateSelectedFilterLabels();
   renderTryOnCatalog();
 }
@@ -1673,19 +1682,37 @@ function navCardHtml(action, title, sub) {
 
 function modelCardHtml(kind, item, index) {
   const active = accessoryState.selected[kind] === index ? ' is-active' : '';
-  return `<button class="catalog-model-card${active}" type="button" data-action="select-model" data-kind="${kind}" data-index="${index}">
-    <img src="${item.src}" alt="${SUBCATEGORY_LABELS[kind]} ${index + 1}" />
-    <span>${item.name}</span>
-  </button>`;
+  const fav = isFavorite(kind, index) ? ' is-fav' : '';
+  const colorIdx = accessoryState.selectedColor[kind] ?? 0;
+  const colors = item.colors;
+  const colorSwatches = colors ? `<div class="catalog-color-swatches">${colors.map((c, ci) => {
+    const cActive = colorIdx === ci && accessoryState.selected[kind] === index ? ' is-active' : '';
+    const bg = c.saturate === 0 ? '#555' : `hsl(${c.hue + 30}, 60%, 55%)`;
+    return `<button class="catalog-color-dot${cActive}" type="button" data-action="select-color" data-kind="${kind}" data-index="${index}" data-ci="${ci}" style="background:${bg}" title="${c.name}"></button>`;
+  }).join('')}</div>` : '';
+  return `<div class="catalog-model-slide">
+    <div class="catalog-model-card-wrap">
+      <button class="catalog-model-card${active}" type="button" data-action="select-model" data-kind="${kind}" data-index="${index}">
+        <img src="${item.src}" alt="${SUBCATEGORY_LABELS[kind]} ${index + 1}" />
+        <span>${item.name}</span>
+      </button>
+      <button class="fav-btn${fav}" type="button" data-action="toggle-fav" data-kind="${kind}" data-index="${index}" title="Favourite">♡</button>
+    </div>
+    ${colorSwatches}
+  </div>`;
 }
 
 function swatchHtml(kind, item, index) {
   const active = accessoryState.selected[kind] === index ? ' is-active' : '';
+  const fav = isFavorite(kind, index) ? ' is-fav' : '';
   const color = item.color.replace(/,\s*0\.\d+\)/, ', 1)');
-  return `<button class="catalog-swatch${active}" type="button" data-action="select-model" data-kind="${kind}" data-index="${index}">
-    <span class="catalog-swatch-dot" style="background:${color}"></span>
-    <span>${item.name}</span>
-  </button>`;
+  return `<div class="catalog-swatch-wrap">
+    <button class="catalog-swatch${active}" type="button" data-action="select-model" data-kind="${kind}" data-index="${index}">
+      <span class="catalog-swatch-dot" style="background:${color}"></span>
+      <span>${item.name}</span>
+    </button>
+    <button class="fav-btn${fav}" type="button" data-action="toggle-fav" data-kind="${kind}" data-index="${index}" title="Favourite">♡</button>
+  </div>`;
 }
 
 function renderTryOnCatalog() {
@@ -1693,12 +1720,18 @@ function renderTryOnCatalog() {
 
   if (catalogBackBtn) catalogBackBtn.style.visibility = accessoryState.menuLevel === 'main' ? 'hidden' : 'visible';
 
+  // Update fav-filter button label
+  const favFilterBtn = $('#catalogFavFilterBtn');
+  if (favFilterBtn) {
+    favFilterBtn.classList.toggle('is-active', accessoryState.showFavoritesOnly);
+    favFilterBtn.textContent = accessoryState.showFavoritesOnly ? '♥ All' : '♡ Favs';
+  }
+
   if (accessoryState.menuLevel === 'main') {
     if (catalogTitle) catalogTitle.textContent = 'Categories';
     if (catalogBreadcrumb) catalogBreadcrumb.textContent = 'Main menu';
     catalogMenu.innerHTML = [
       navCardHtml('category-accessories', 'Accessories', 'Glasses, hats, earrings, necklace'),
-      navCardHtml('category-makeup', 'Makeup', 'Lipstick and blush colors'),
     ].join('');
     updateSelectedFilterLabels();
     return;
@@ -1715,15 +1748,49 @@ function renderTryOnCatalog() {
     return;
   }
 
+  // ── items level ──
   const kind = accessoryState.subcategory;
   const category = CATEGORY_TREE[accessoryState.category];
   if (catalogTitle) catalogTitle.textContent = SUBCATEGORY_LABELS[kind];
   if (catalogBreadcrumb) catalogBreadcrumb.textContent = `Main menu → ${category.title} → ${SUBCATEGORY_LABELS[kind]}`;
-  const items = FILTER_CATALOG[kind] || [];
-  const isMakeup = kind === 'lipstick' || kind === 'blush';
-  catalogMenu.innerHTML = `<div class="${isMakeup ? 'catalog-swatch-grid' : 'catalog-model-grid'}">
-    ${items.map((item, index) => isMakeup ? swatchHtml(kind, item, index) : modelCardHtml(kind, item, index)).join('')}
-  </div>`;
+
+  const isMakeup = false;
+  let items = FILTER_CATALOG[kind] || [];
+  let indices = items.map((_, i) => i);
+
+  if (accessoryState.showFavoritesOnly) {
+    indices = indices.filter(i => isFavorite(kind, i));
+  }
+
+  {
+    // Swiper markup
+    const slides = indices.map(i => `<div class="swiper-slide">${modelCardHtml(kind, items[i], i)}</div>`).join('');
+    catalogMenu.innerHTML = `
+      <div class="swiper catalog-swiper" id="catalogSwiper">
+        <div class="swiper-wrapper">${slides}</div>
+        <div class="swiper-pagination"></div>
+        <div class="swiper-button-prev"></div>
+        <div class="swiper-button-next"></div>
+      </div>`;
+
+    // Init Swiper after DOM update
+    requestAnimationFrame(() => {
+      if (typeof Swiper !== 'undefined') {
+        new Swiper('#catalogSwiper', {
+          slidesPerView: 'auto',
+          spaceBetween: 10,
+          grabCursor: true,
+          pagination: { el: '.swiper-pagination', clickable: true },
+          navigation: { nextEl: '.swiper-button-next', prevEl: '.swiper-button-prev' },
+          breakpoints: {
+            0: { slidesPerView: 1.6 },
+            400: { slidesPerView: 2.2 },
+            600: { slidesPerView: 2.8 },
+          },
+        });
+      }
+    });
+  }
   updateSelectedFilterLabels();
 }
 
@@ -1738,15 +1805,39 @@ if (catalogMenu) {
     if (!button) return;
     const action = button.dataset.action;
     if (action === 'category-accessories') setCatalogView('subcategories', 'accessories', null);
-    else if (action === 'category-makeup') setCatalogView('subcategories', 'makeup', null);
     else if (action.startsWith('subcategory-')) setCatalogView('items', accessoryState.category, action.replace('subcategory-', ''));
     else if (action === 'select-model') {
-      accessoryState.selected[button.dataset.kind] = Number(button.dataset.index);
+      const kind = button.dataset.kind;
+      const idx = Number(button.dataset.index);
+      // toggle off if already selected
+      accessoryState.selected[kind] = accessoryState.selected[kind] === idx ? null : idx;
+      updateSelectedFilterLabels();
+      renderTryOnCatalog();
+    } else if (action === 'toggle-fav') {
+      event.stopPropagation();
+      toggleFavorite(button.dataset.kind, Number(button.dataset.index));
+      renderTryOnCatalog();
+    } else if (action === 'select-color') {
+      event.stopPropagation();
+      const kind = button.dataset.kind;
+      const modelIdx = Number(button.dataset.index);
+      const ci = Number(button.dataset.ci);
+      // Also select the model when picking a color
+      accessoryState.selected[kind] = modelIdx;
+      accessoryState.selectedColor[kind] = ci;
       updateSelectedFilterLabels();
       renderTryOnCatalog();
     }
   });
 }
+
+// Fav filter toggle (button in topbar, injected by updateCatalogTopbar)
+document.addEventListener('click', event => {
+  if (event.target?.id === 'catalogFavFilterBtn') {
+    accessoryState.showFavoritesOnly = !accessoryState.showFavoritesOnly;
+    renderTryOnCatalog();
+  }
+});
 
 if (catalogBackBtn) catalogBackBtn.addEventListener('click', catalogBack);
 if (catalogClearBtn) catalogClearBtn.addEventListener('click', clearTryOnFilters);
@@ -1864,9 +1955,11 @@ function getAccessoryMeasurements(data) {
     faceHeight = dist2d(forehead, chin);
     const faceCenter = { x: (Number(leftCheek.x) + Number(rightCheek.x)) / 2, y: (Number(leftCheek.y) + Number(rightCheek.y)) / 2 };
     yaw = (Number(noseTip.x) - faceCenter.x) / Math.max(faceWidth, 1);
-    earringLeft = { x: Number(leftCheek.x) - faceWidth * 0.07, y: Number(leftCheek.y) + faceHeight * 0.12 };
-    earringRight = { x: Number(rightCheek.x) + faceWidth * 0.07, y: Number(rightCheek.y) + faceHeight * 0.12 };
-    necklaceAnchor = { x: (Number(chin.x) * 0.20) + (rawEyeCenterX * 0.80), y: Number(chin.y) + faceHeight * 0.28 };
+    // Earlobe: landmark 234/454 is the cheek-ear boundary; drop slightly for lobe
+    earringLeft = { x: Number(leftCheek.x) - faceWidth * 0.05, y: Number(leftCheek.y) + faceHeight * 0.05 };
+    earringRight = { x: Number(rightCheek.x) + faceWidth * 0.05, y: Number(rightCheek.y) + faceHeight * 0.05 };
+    // Necklace anchor: just below the chin at the throat
+    necklaceAnchor = { x: (Number(chin.x) * 0.40) + (rawEyeCenterX * 0.60), y: Number(chin.y) + faceHeight * 0.06 };
     blushLeftAnchors = pointList(points, BLUSH_LEFT_LANDMARKS);
     blushRightAnchors = pointList(points, BLUSH_RIGHT_LANDMARKS);
     blushLeft = avgPoints(points, BLUSH_LEFT_LANDMARKS);
@@ -1902,7 +1995,7 @@ function getAccessoryMeasurements(data) {
     yaw = (Number(noseTip.x) - faceCenter.x) / Math.max(faceWidth, 1);
     earringLeft = { x: Number(leftJaw.x) - faceWidth * 0.02, y: Number(leftJaw.y) };
     earringRight = { x: Number(rightJaw.x) + faceWidth * 0.02, y: Number(rightJaw.y) };
-    necklaceAnchor = { x: (Number(chin.x) * 0.20) + (rawEyeCenterX * 0.80), y: Number(chin.y) + faceHeight * 0.30 };
+    necklaceAnchor = { x: (Number(chin.x) * 0.40) + (rawEyeCenterX * 0.60), y: Number(chin.y) + faceHeight * 0.06 };
     blushLeft = avgPoints(points, [2, 3, 31]) || leftJaw;
     blushRight = avgPoints(points, [13, 14, 35]) || rightJaw;
     blushLeftAnchors = [];
@@ -2013,128 +2106,8 @@ function drawSoftPolygonMask(ctx, points, color, opacity, blurPx, stroke = null)
   ctx.drawImage(layer, 0, 0);
 }
 
-function drawLipstickMask(ctx, outerPoints, innerPoints, color, opacity, blurPx, stroke = null) {
-  if (!Array.isArray(outerPoints) || outerPoints.length < 3) return;
-  const layer = document.createElement('canvas');
-  layer.width = ctx.canvas.width;
-  layer.height = ctx.canvas.height;
-  const layerCtx = layer.getContext('2d');
-
-  layerCtx.save();
-  layerCtx.globalAlpha = opacity;
-  drawFilledLandmarkShape(layerCtx, outerPoints, color, null);
-  if (Array.isArray(innerPoints) && innerPoints.length >= 3) {
-    // Cut the inner mouth opening out of the lipstick mask so color stays on the lips.
-    layerCtx.globalCompositeOperation = 'destination-out';
-    layerCtx.globalAlpha = 1;
-    drawFilledLandmarkShape(layerCtx, innerPoints, 'rgba(0, 0, 0, 1)', null);
-  }
-  layerCtx.restore();
-
-  const blurred = document.createElement('canvas');
-  blurred.width = ctx.canvas.width;
-  blurred.height = ctx.canvas.height;
-  const blurredCtx = blurred.getContext('2d');
-  blurredCtx.save();
-  blurredCtx.filter = `blur(${blurPx}px)`;
-  blurredCtx.drawImage(layer, 0, 0);
-  blurredCtx.restore();
-  ctx.drawImage(blurred, 0, 0);
-
-  if (stroke) {
-    ctx.save();
-    ctx.globalAlpha = opacity * 0.35;
-    drawFilledLandmarkShape(ctx, outerPoints, 'rgba(0, 0, 0, 0)', stroke);
-    ctx.restore();
-  }
-}
-
-function rgbaWithAlpha(color, alpha) {
-  const match = String(color).match(/rgba?\(([^)]+)\)/);
-  if (!match) return color;
-  const parts = match[1].split(',').map(part => part.trim());
-  return `rgba(${parts[0]}, ${parts[1]}, ${parts[2]}, ${alpha})`;
-}
-
-function drawBlush(ctx, center, faceWidth, color) {
-  if (!center) return;
-  const radiusX = faceWidth * 0.105 * BLUSH_SCALE;
-  const radiusY = faceWidth * 0.065 * BLUSH_SCALE;
-  const layer = document.createElement('canvas');
-  layer.width = ctx.canvas.width;
-  layer.height = ctx.canvas.height;
-  const layerCtx = layer.getContext('2d');
-  layerCtx.save();
-  layerCtx.filter = `blur(${BLUSH_BLUR}px)`;
-  layerCtx.globalAlpha = BLUSH_OPACITY;
-  layerCtx.translate(center.x, center.y);
-  layerCtx.scale(radiusX, radiusY);
-  const gradient = layerCtx.createRadialGradient(0, 0, 0, 0, 0, 1);
-  gradient.addColorStop(0, rgbaWithAlpha(color, 0.95));
-  gradient.addColorStop(0.48, rgbaWithAlpha(color, 0.36));
-  gradient.addColorStop(1, rgbaWithAlpha(color, 0));
-  layerCtx.fillStyle = gradient;
-  layerCtx.beginPath();
-  layerCtx.arc(0, 0, 1, 0, Math.PI * 2);
-  layerCtx.fill();
-  layerCtx.restore();
-  ctx.drawImage(layer, 0, 0);
-}
-
-function drawMakeupDebug(ctx, measurements) {
-  if (!accessoryState.debugMakeup || !measurements) return;
-  const drawPoints = (points, color) => {
-    if (!Array.isArray(points)) return;
-    ctx.save();
-    ctx.fillStyle = color;
-    ctx.strokeStyle = color;
-    ctx.lineWidth = 1;
-    points.forEach(point => {
-      ctx.beginPath();
-      ctx.arc(point.x, point.y, 3, 0, Math.PI * 2);
-      ctx.fill();
-    });
-    if (points.length > 2) {
-      ctx.beginPath();
-      ctx.moveTo(points[0].x, points[0].y);
-      points.slice(1).forEach(point => ctx.lineTo(point.x, point.y));
-      ctx.closePath();
-      ctx.stroke();
-    }
-    ctx.restore();
-  };
-  drawPoints(measurements.lipOuter, 'rgba(255, 64, 128, 0.95)');
-  drawPoints(measurements.lipInner, 'rgba(255, 210, 80, 0.95)');
-  drawPoints(measurements.blushLeftAnchors, 'rgba(80, 220, 255, 0.95)');
-  drawPoints(measurements.blushRightAnchors, 'rgba(80, 220, 255, 0.95)');
-}
-
 function drawAccessoriesOnContext(ctx, measurements) {
   if (!measurements) return;
-
-  const lipstickIndex = accessoryState.selected.lipstick;
-  if (lipstickIndex !== null && measurements.hasPreciseMakeup) {
-    const lipstick = FILTER_CATALOG.lipstick[lipstickIndex];
-    const yawAbs = Math.abs(measurements.yaw || 0);
-    const lipstickOpacity = LIPSTICK_OPACITY * (1 - (yawAbs * 0.40));
-    const lipstickBlur = LIPSTICK_BLUR + (yawAbs * 4);
-    drawLipstickMask(ctx, measurements.lipOuter, measurements.lipInner, lipstick.color, lipstickOpacity, lipstickBlur, lipstick.stroke);
-  }
-
-  const blushIndex = accessoryState.selected.blush;
-  if (blushIndex !== null && measurements.hasPreciseMakeup) {
-    const blush = FILTER_CATALOG.blush[blushIndex];
-    const leftBlushCenter = {
-      x: measurements.blushLeft.x - (measurements.faceWidth * BLUSH_X_OFFSET),
-      y: measurements.blushLeft.y + (measurements.faceWidth * BLUSH_Y_OFFSET),
-    };
-    const rightBlushCenter = {
-      x: measurements.blushRight.x + (measurements.faceWidth * BLUSH_X_OFFSET),
-      y: measurements.blushRight.y + (measurements.faceWidth * BLUSH_Y_OFFSET),
-    };
-    drawBlush(ctx, leftBlushCenter, measurements.faceWidth, blush.color);
-    drawBlush(ctx, rightBlushCenter, measurements.faceWidth, blush.color);
-  }
 
   const glassesIndex = accessoryState.selected.glasses;
   if (glassesIndex !== null && accessoriesReady()) {
@@ -2152,12 +2125,12 @@ function drawAccessoriesOnContext(ctx, measurements) {
     const hat = FILTER_CATALOG.hat[hatIndex].image;
     const hatW = measurements.faceWidth * HAT_WIDTH_FACTOR_WEB;
     const hatH = hatW * (hat.naturalHeight / hat.naturalWidth);
-    const hatY = measurements.forehead.y
-      - (hatH * HAT_BOTTOM_ALIGNMENT_WEB)
-      + (measurements.faceHeight * HAT_Y_OFFSET_FACTOR_WEB);
+    // Hat wear-line is ~62% from image top — align it to the forehead/hairline.
+    // center_y = forehead.y - hatH*(0.62 - 0.50) = forehead.y - hatH*0.12
+    const hatCenterY = measurements.forehead.y - hatH * 0.12;
     const hatYawShift = (Number(measurements.yaw) || 0) * measurements.faceWidth * 0.26;
     const hatX = measurements.forehead.x + hatYawShift;
-    drawYawWarpedImage(ctx, hat, hatX, hatY + (hatH / 2), hatW, hatH, measurements.roll, measurements.yaw);
+    drawYawWarpedImage(ctx, hat, hatX, hatCenterY, hatW, hatH, measurements.roll, measurements.yaw);
   }
 
   const earringsIndex = accessoryState.selected.earrings;
@@ -2166,7 +2139,8 @@ function drawAccessoriesOnContext(ctx, measurements) {
     const earringH = measurements.faceHeight * 0.24;
     const earringW = earringH * (earrings.naturalWidth / earrings.naturalHeight);
     const yaw = measurements.yaw || 0;
-    
+    const earringFilter = colorFilterString('earrings', accessoryState.selectedColor.earrings);
+
     let leftOpacity = 1.0;
     let rightOpacity = 1.0;
     if (yaw > 0) {
@@ -2178,13 +2152,16 @@ function drawAccessoriesOnContext(ctx, measurements) {
     if (leftOpacity > 0.05) {
       ctx.save();
       ctx.globalAlpha = leftOpacity;
-      drawRotatedImage(ctx, earrings, measurements.earringLeft.x, measurements.earringLeft.y, earringW, earringH, measurements.roll * 0.45);
+      if (earringFilter) ctx.filter = earringFilter;
+      // Draw earring hanging DOWN from the anchor: top of image = anchor point
+      drawRotatedImage(ctx, earrings, measurements.earringLeft.x, measurements.earringLeft.y + earringH * 0.50, earringW, earringH, measurements.roll * 0.45);
       ctx.restore();
     }
     if (rightOpacity > 0.05) {
       ctx.save();
       ctx.globalAlpha = rightOpacity;
-      drawRotatedImage(ctx, earrings, measurements.earringRight.x, measurements.earringRight.y, earringW, earringH, measurements.roll * 0.45);
+      if (earringFilter) ctx.filter = earringFilter;
+      drawRotatedImage(ctx, earrings, measurements.earringRight.x, measurements.earringRight.y + earringH * 0.50, earringW, earringH, measurements.roll * 0.45);
       ctx.restore();
     }
   }
@@ -2194,7 +2171,13 @@ function drawAccessoriesOnContext(ctx, measurements) {
     const necklace = FILTER_CATALOG.necklace[necklaceIndex].image;
     const necklaceW = measurements.faceWidth * 1.62;
     const necklaceH = necklaceW * (necklace.naturalHeight / necklace.naturalWidth);
-    drawRotatedImage(ctx, necklace, measurements.necklaceAnchor.x, measurements.necklaceAnchor.y, necklaceW, necklaceH, measurements.roll * 0.18);
+    const necklaceFilter = colorFilterString('necklace', accessoryState.selectedColor.necklace);
+    ctx.save();
+    if (necklaceFilter) ctx.filter = necklaceFilter;
+    // Necklace chain-tops are near the top of the image (~12% from top).
+    // center_y = anchor_y + necklaceH*(0.50 - 0.12) = anchor_y + necklaceH*0.38
+    drawRotatedImage(ctx, necklace, measurements.necklaceAnchor.x, measurements.necklaceAnchor.y + necklaceH * 0.38, necklaceW, necklaceH, measurements.roll * 0.18);
+    ctx.restore();
   }
 
   drawMakeupDebug(ctx, measurements);
@@ -2391,60 +2374,15 @@ if ($('#btnCapture')) $('#btnCapture').addEventListener('click', () => {
 
 /* ═══════════════════ REFERENCE IMAGE (FR-3.8.1) ═══════════════════ */
 const refDrop = $('#refDrop'), refInput = $('#refInput'), refPreview = $('#refPreview'), refImg = $('#refImg');
-if (refDrop) {
-  refDrop.addEventListener('click', () => refInput.click());
-  refDrop.addEventListener('dragover', e => { e.preventDefault(); refDrop.style.borderColor = 'rgba(139,92,246,.55)'; });
-  refDrop.addEventListener('dragleave', () => { refDrop.style.borderColor = ''; });
-  refDrop.addEventListener('drop', e => {
-    e.preventDefault(); refDrop.style.borderColor = '';
-    if (e.dataTransfer.files.length) loadRefImage(e.dataTransfer.files[0]);
-  });
-}
-if (refInput) refInput.addEventListener('change', () => { if (refInput.files.length) loadRefImage(refInput.files[0]); });
-function loadRefImage(file) {
-  if (!['image/jpeg', 'image/png'].includes(file.type)) { toast('Only JPG/PNG accepted.', 'error'); return; }
-  const reader = new FileReader();
-  reader.onload = e => {
-    if (refImg) refImg.src = e.target.result;
-    if (refDrop) refDrop.style.display = 'none';
-    if (refPreview) refPreview.style.display = 'flex';
-  };
-  reader.readAsDataURL(file);
-}
-if ($('#btnClearRef')) $('#btnClearRef').addEventListener('click', () => {
-  if (refImg) refImg.src = '';
-  if (refInput) refInput.value = '';
-  if (refPreview) refPreview.style.display = 'none';
-  if (refDrop) refDrop.style.display = 'flex';
-});
+// Reference expression elements removed
 
 function getExpressionMode() {
-  const mode = $('#sExprMode')?.value || 'manual';
-  return mode === 'reference-only' ? 'reference-only' : 'manual';
+  return 'manual';
 }
 
 function syncExpressionModeUi() {
-  const mode = getExpressionMode();
-  backendState.expressionMode = mode;
-  const isReferenceOnly = mode === 'reference-only';
-  const applyBtn = $('#btnApplyExpr');
-  if (applyBtn && !applyBtn.disabled) {
-    applyBtn.innerHTML = isReferenceOnly
-      ? '<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polygon points="5 3 19 12 5 21 5 3" /></svg> Apply Reference'
-      : '<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polygon points="5 3 19 12 5 21 5 3" /></svg> Apply Warp';
-  }
-  $$('#page-expression .param-slider').forEach(slider => {
-    slider.disabled = isReferenceOnly;
-  });
+  backendState.expressionMode = 'manual';
 }
-
-if ($('#sExprMode')) $('#sExprMode').addEventListener('change', () => {
-  syncExpressionModeUi();
-  toast(getExpressionMode() === 'reference-only'
-    ? 'Reference Only mode enabled. Upload a reference face, then apply.'
-    : 'Manual slider mode enabled.',
-    'info');
-});
 
 /* ═══════════════════ RADIO CARDS ═══════════════════ */
 const radioRGB = $('#radioRGB'), radioGray = $('#radioGray');
@@ -2752,65 +2690,12 @@ if ($('#btnCompareAging')) $('#btnCompareAging').addEventListener('click', () =>
 
 /* ═══════════════════ EXPRESSION TRANSFER ═══════════════════ */
 async function getReferenceImageBlob() {
-  const file = refInput?.files?.[0];
-  if (file) return file;
-  const refSrc = refImg?.src;
-  if (!refSrc || refSrc === window.location.href) return null;
-  const refResp = await fetch(refSrc);
-  return refResp.blob();
+  return null;
 }
-
-async function runReferenceExpressionTransfer(buttonEl) {
-  if (!appState.imageDataUrl) { toast('Upload a target image first.', 'warning'); return; }
-  const refBlob = await getReferenceImageBlob();
-  if (!refBlob) { toast('Upload a reference expression image first.', 'warning'); return; }
-
-  const btn = buttonEl;
-  const prev = btn.innerHTML;
-  btn.disabled = true;
-  btn.textContent = '\u29d7 Transferring…';
-
-  try {
-    const targetBlob = await getCurrentImageBlob();
-    if (!targetBlob) throw new Error('No target image available.');
-    const fd = new FormData();
-    fd.append('target', targetBlob, appState.fileName || 'target.jpg');
-    fd.append('reference', refBlob, 'reference.jpg');
-    fd.append('strength', '0.6');
-
-    const res = await fetch('/api/expression-transfer', { method: 'POST', body: fd });
-    const data = await res.json();
-    if (!res.ok || !data.ok) throw new Error(data.error || 'Expression transfer failed.');
-
-    const outUrl = `data:image/jpeg;base64,${data.image}`;
-    backendState.lastExprDataUrl = outUrl;
-    backendState.lastAgingDataUrl = '';
-    backendState.analysisLoaded = false;
-    backendState.analysisData = null;
-    backendState.analysisSpectra = null;
-    renderExpressionCanvasFromDataUrl(outUrl);
-    setReferenceTransferReadout(data);
-    toast(`Expression transferred \u00b7 ${data.durationMs || 0} ms \u00b7 ${data.triangleCount ?? '?'} tri`, 'success');
-  } catch (err) {
-    toast(`Transfer error: ${err.message}`, 'error');
-  } finally {
-    btn.disabled = false;
-    btn.innerHTML = prev;
-    syncExpressionModeUi();
-  }
-}
-
-if ($('#btnApplyTransfer')) $('#btnApplyTransfer').addEventListener('click', function () {
-  runReferenceExpressionTransfer(this);
-});
 
 /* ═══════════════════ APPLY WARP FEEDBACK ═══════════════════ */
 if ($('#btnApplyExpr')) $('#btnApplyExpr').addEventListener('click', async function () {
   if (!appState.imageDataUrl) { toast('Upload an image first.', 'warning'); return; }
-  if (getExpressionMode() === 'reference-only') {
-    await runReferenceExpressionTransfer(this);
-    return;
-  }
 
   const btn = this;
   const prevText = btn.innerHTML;

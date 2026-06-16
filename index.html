@@ -5,7 +5,8 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width,initial-scale=1.0" />
   <title>FaceWarp DSP</title>
-  <link rel="stylesheet" href="style.css?v=tryon-glasses-1" />
+  <link rel="stylesheet" href="style.css?v=tryon-v2" />
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/swiper@11/swiper-bundle.min.css" />
   <link
     href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600;700&display=swap"
     rel="stylesheet" />
@@ -240,7 +241,11 @@
                     <div class="catalog-kicker">Virtual try-on</div>
                     <div class="catalog-title" id="catalogTitle">Categories</div>
                   </div>
-                  <button class="btn btn-ghost btn-xs" id="catalogBackBtn" type="button">← Back</button>
+                  <div class="catalog-topbar-actions">
+                    <button class="btn btn-ghost btn-xs catalog-fav-filter" id="catalogFavFilterBtn" type="button"
+                      title="Show favourites only">♡ Favs</button>
+                    <button class="btn btn-ghost btn-xs" id="catalogBackBtn" type="button">← Back</button>
+                  </div>
                 </div>
 
                 <div class="catalog-breadcrumb" id="catalogBreadcrumb">Main menu</div>
@@ -251,10 +256,7 @@
                   <div><span>Hat</span><strong id="selectedHatName">Off</strong></div>
                   <div><span>Earrings</span><strong id="selectedEarringsName">Off</strong></div>
                   <div><span>Necklace</span><strong id="selectedNecklaceName">Off</strong></div>
-                  <div><span>Lipstick</span><strong id="selectedLipstickName">Off</strong></div>
-                  <div><span>Blush</span><strong id="selectedBlushName">Off</strong></div>
                   <div><span>Mirror</span><strong id="mirrorStatus">Off</strong></div>
-                  <div><span>Debug</span><strong id="makeupDebugStatus">Debug anchors off</strong></div>
                   <div><span>FPS</span><strong id="trackingFps">--</strong></div>
                   <div><span>Latency</span><strong id="trackingLatency">-- ms</strong></div>
                   <div><span>Alpha</span><strong id="trackingAlpha">0.65 / 0.35</strong></div>
@@ -1581,21 +1583,6 @@
 
           <div class="select-wrap">
             <label class="select-label">
-              Expression Source
-              <span class="info-tip" tabindex="0" role="tooltip" aria-label="Expression source info">&#x24D8;
-                <span class="info-tip-popup"><strong>Manual Sliders</strong> uses the controls above. <strong>Reference
-                    Only</strong> ignores slider values and copies the uploaded reference expression.</span>
-              </span>
-            </label>
-            <select id="sExprMode" class="select">
-              <option value="manual" selected>Manual Sliders</option>
-              <option value="reference-only">Reference Only</option>
-            </select>
-            <span class="select-micro">Choose whether expression comes from sliders or the reference image</span>
-          </div>
-
-          <div class="select-wrap">
-            <label class="select-label">
               Warp Method
               <span class="info-tip" tabindex="0" role="tooltip" aria-label="Warp method info">&#x24D8;
                 <span class="info-tip-popup">Determines the mathematical algorithm that maps source landmark positions
@@ -1638,27 +1625,6 @@
             Apply Warp
           </button>
 
-          <div class="ctrl-divider"></div>
-          <div class="card-head">
-            <h3>Reference Expression</h3>
-          </div>
-          <p class="card-desc" style="margin:0 0 10px">Upload a reference face to transfer its expression via AI.</p>
-          <div class="ref-drop" id="refDrop">
-            <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2"
-              stroke-linecap="round" stroke-linejoin="round">
-              <circle cx="12" cy="8" r="4" />
-              <path d="M6 20v-2a6 6 0 0112 0v2" />
-            </svg>
-            <span id="refLabel">Drop reference image or <u>browse</u></span>
-            <input type="file" id="refInput" accept=".jpg,.jpeg,.png" hidden />
-          </div>
-          <div class="ref-preview" id="refPreview" style="display:none">
-            <img id="refImg" src="" alt="Reference face" />
-            <div style="display:flex;gap:6px;margin-top:6px;">
-              <button class="btn btn-ghost btn-xs" id="btnClearRef">&#x2715; Clear</button>
-              <button class="btn btn-primary btn-xs" id="btnApplyTransfer">&#x279C; Transfer Expression</button>
-            </div>
-          </div>
         </div>
 
         <div class="expr-compare">
@@ -2700,7 +2666,8 @@
   </main>
 
   <div id="toastContainer"></div>
-  <script src="app.js?v=tryon-glasses-1"></script>
+  <script src="https://cdn.jsdelivr.net/npm/swiper@11/swiper-bundle.min.js"></script>
+  <script src="app.js?v=tryon-v2"></script>
 </body>
 
 </html>
