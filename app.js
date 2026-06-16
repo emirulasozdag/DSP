@@ -82,6 +82,7 @@ const backendState = {
   analysisSpectra: null,
   spectrumMode: 'mag',
   expressionMode: 'manual',
+  landmarkSchema: '68',  // '68' or '468' for dynamic schema toggle
 };
 
 function mapLandmarkMethodLabel(method, conf) {
@@ -316,10 +317,86 @@ function updateLandmarkLabels(mx, my) {
   });
 }
 
+function createDynamicLandmarkCircles(count) {
+  const ptsG = $('#ptsG');
+  if (!ptsG) return;
+  ptsG.innerHTML = '';
+  
+  const colors = {
+    jaw: '#8b5cf6', brow: '#c4b5fd', eyes: '#06b6d4',
+    nose: '#f59e0b', mouth: '#f472b6',
+  };
+  
+  for (let i = 0; i < count; i += 1) {
+    let region = 'jaw';
+    if (i >= 17 && i <= 26) region = 'brow';
+    else if (i >= 36 && i <= 47) region = 'eyes';
+    else if (i >= 27 && i <= 35) region = 'nose';
+    else if (i >= 48 && i <= 67) region = 'mouth';
+    
+    const circle = document.createElementNS('http://www.w3.org/2000/svg', 'circle');
+    circle.setAttribute('cx', '150');
+    circle.setAttribute('cy', '150');
+    circle.setAttribute('r', '2.8');
+    circle.setAttribute('fill', colors[region] || '#8b5cf6');
+    circle.setAttribute('class', 'lm-pt');
+    circle.setAttribute('data-idx', String(i));
+    if (i !== 0 && i !== 8 && i !== 16 && i !== 25 && i !== 30) {
+      circle.setAttribute('opacity', '0.82');
+    }
+    ptsG.appendChild(circle);
+  }
+}
+
+function switchLandmarkSchema(schema) {
+  if (!backendState.lastLmData) {
+    toast('No landmark data cached. Run detection first.', 'warning');
+    return;
+  }
+  
+  backendState.landmarkSchema = schema;
+  
+  const landmarkSource = schema === '468' ? backendState.lastLmData.rawLandmarks : backendState.lastLmData.reduced68 || backendState.lastLmData.landmarks;
+  const meshSource = schema === '468' ? backendState.lastLmData.rawLandmarks : backendState.lastLmData.reduced68 || backendState.lastLmData.landmarks;
+  
+  const targetCount = schema === '468' ? (landmarkSource?.length || 468) : 68;
+  createDynamicLandmarkCircles(targetCount);
+  
+  const points = (landmarkSource || []).map(p => ({
+    x: p.x,
+    y: p.y,
+    imageWidth: backendState.lastLmData.width,
+    imageHeight: backendState.lastLmData.height,
+  }));
+  
+  applyLandmarksToSvg(points, points);
+
+  // 468-pt mode: hide dlib connection paths (they use 68-pt indices and produce wrong lines)
+  // 68-pt mode: restore them
+  const connG = $('#connG');
+  if (connG) connG.style.display = (schema === '468') ? 'none' : '';
+
+  const toolbar = $('#lmToolbarRight');
+  if (toolbar) toolbar.textContent = `${targetCount} pts`;
+  // Update Region Breakdown badge and Total count
+  if ($('#lmRegionBadge')) $('#lmRegionBadge').textContent = `${targetCount} pts`;
+  if ($('#lmTotalCount')) $('#lmTotalCount').textContent = targetCount;
+  if ($('#lmPtsCount')) $('#lmPtsCount').textContent = targetCount;
+  if ($('#lmStatPts')) $('#lmStatPts').textContent = targetCount;
+  // Sync all #segSchema button states
+  $$('#segSchema .seg-btn').forEach(b => b.classList.toggle('active', b.getAttribute('data-val') === schema));
+  toast(`Switched to ${schema}-point schema (${targetCount} landmarks)`, 'success');
+}
+
 function applyLandmarksToSvg(points68, meshPoints = points68) {
   const svg = $('#lmSvg');
-  const circles = Array.from($$('#ptsG circle'));
-  if (!svg || circles.length === 0) return;
+  let circles = Array.from($$('#ptsG circle'));
+  if (!svg || circles.length === 0) {
+    // Create at least 68 circles if none exist
+    createDynamicLandmarkCircles(68);
+    circles = Array.from($$('#ptsG circle'));
+    if (!circles.length) return;
+  }
 
   const lmCanvas = document.querySelector('.lm-canvas');
   const bgImg = document.querySelector('#lmBgImg');
@@ -333,7 +410,8 @@ function applyLandmarksToSvg(points68, meshPoints = points68) {
   svg.setAttribute('height', String(displayedImageHeight));
   svg.setAttribute('viewBox', `0 0 ${displayedImageWidth} ${displayedImageHeight}`);
 
-  const sampled = sampleLandmarks(points68, circles.length);
+  // No sampling when using exact schema; match points to circles
+  const sampled = circles.length === (points68?.length || 0) ? points68 : sampleLandmarks(points68, circles.length);
   backendState.landmarks = sampled;
 
   // Compute screen-space mapped coordinates from image-space landmarks.
@@ -426,6 +504,17 @@ function applyLandmarkStatsUI(data) {
   const circ = 251.3;
   const fillLen = ((circ * conf) / 100).toFixed(1);
   if ($('#lmAccRing')) $('#lmAccRing').setAttribute('stroke-dasharray', `${fillLen} ${circ}`);
+  
+  // Update schema button states
+  updateSchemaButtonUI();
+}
+
+function updateSchemaButtonUI() {
+  const schemaButtons = $$('#segSchema .seg-btn');
+  schemaButtons.forEach(btn => {
+    const val = btn.getAttribute('data-val');
+    btn.classList.toggle('active', val === backendState.landmarkSchema);
+  });
 }
 
 async function fetchLandmarksFromBackend(force = false) {
@@ -1110,15 +1199,25 @@ if ($('#btnRunLM')) {
   });
 }
 
-/* Model / schema toggles (visual-only — backend always uses best available) */
-['#segModel', '#segSchema'].forEach(sel => {
-  const grp = $(sel);
-  if (!grp) return;
-  grp.querySelectorAll('.seg-btn').forEach(btn => {
+/* Model toggle (visual-only) */
+const segModel = $('#segModel');
+if (segModel) {
+  segModel.querySelectorAll('.seg-btn').forEach(btn => {
     btn.addEventListener('click', () => {
-      grp.querySelectorAll('.seg-btn').forEach(b => b.classList.remove('active'));
+      segModel.querySelectorAll('.seg-btn').forEach(b => b.classList.remove('active'));
       btn.classList.add('active');
     });
+  });
+}
+/* Schema toggle — all instances (toolbar + sidebar) — actually switches rendering */
+$$('#segSchema').forEach(segSchema => {
+  segSchema.querySelectorAll('.seg-btn').forEach(btn => {
+    // Skip buttons that already have inline onclick handlers
+    if (!btn.getAttribute('onclick')) {
+      btn.addEventListener('click', () => {
+        switchLandmarkSchema(btn.getAttribute('data-val'));
+      });
+    }
   });
 });
 

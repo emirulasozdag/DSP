@@ -840,7 +840,12 @@
               <button class="seg-btn" data-val="nose" style="color:#f59e0b">Nose</button>
               <button class="seg-btn" data-val="mouth" style="color:#f472b6">Mouth</button>
             </div>
-            <div class="lm-toolbar-right">
+            <div class="lm-toolbar-sep"></div>
+            <div class="seg seg-sm" id="segSchema" style="flex:0">
+              <button class="seg-btn active" data-val="68" onclick="switchLandmarkSchema('68')">68-pt</button>
+              <button class="seg-btn" data-val="468" onclick="switchLandmarkSchema('468')">MP 468</button>
+            </div>
+            <div class="lm-toolbar-right" id="lmToolbarRight">
               <span
                 style="font-family:'JetBrains Mono',monospace;font-size:0.62rem;letter-spacing:0.05em;color:var(--indigo)">68
                 pts</span>
@@ -1124,7 +1129,7 @@
           <div class="card">
             <div class="card-head">
               <h3>Region Breakdown</h3>
-              <span class="tag" style="background:rgba(139,92,246,0.12);color:#a78bfa">68 pts</span>
+              <span id="lmRegionBadge" class="tag" style="background:rgba(139,92,246,0.12);color:#a78bfa">68 pts</span>
             </div>
             <div class="legend-grid">
               <div class="lg-row">
@@ -1177,7 +1182,7 @@
                   style="background:transparent;border:1px solid var(--line-strong);border-radius:50%"></span>
                 <div class="lg-row-inner">
                   <div class="lg-row-top"><span style="color:var(--ink);font-weight:700">Total</span><strong
-                      style="color:var(--indigo)">68</strong></div>
+                      id="lmTotalCount" style="color:var(--indigo)">68</strong></div>
                 </div>
               </div>
             </div>
