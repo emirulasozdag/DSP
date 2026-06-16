@@ -99,12 +99,26 @@ for _f in RESULTS_DIR.iterdir():
     if _f.is_file():
         _f.unlink()
 
-from face_aging.aging_service import LocalAgingService
-try:
-    local_aging_service = LocalAgingService()
-except Exception as e:
-    print(f"Failed to load LocalAgingService: {e}")
-    local_aging_service = None
+local_aging_service = None
+local_aging_service_error = None
+
+
+def _get_local_aging_service():
+    """Load the heavy SAM aging model only when the AI endpoint needs it."""
+    global local_aging_service, local_aging_service_error
+    if local_aging_service is not None:
+        return local_aging_service
+    if local_aging_service_error is not None:
+        raise RuntimeError(local_aging_service_error)
+
+    try:
+        from face_aging.aging_service import LocalAgingService
+        local_aging_service = LocalAgingService()
+        return local_aging_service
+    except Exception as e:
+        local_aging_service_error = str(e)
+        print(f"Failed to load LocalAgingService: {e}", flush=True)
+        raise
 
 app = Flask(__name__)
 
@@ -4217,8 +4231,10 @@ def api_aging_ai():
     print("AGING AI ENDPOINT CALLED - LOCAL MODE", flush=True)
     started = time.perf_counter()
 
-    if local_aging_service is None:
-        return _error("Local aging service is not initialized.", 503)
+    try:
+        aging_service = _get_local_aging_service()
+    except Exception as exc:
+        return _error(f"Local aging service is not initialized: {exc}", 503)
 
     raw_file = request.files.get("image")
     if raw_file is None:
@@ -4256,7 +4272,7 @@ def api_aging_ai():
 
     # Local Inference
     try:
-        out = local_aging_service.run_inference(
+        out = aging_service.run_inference(
             image,
             target_age=apparent_age_after,
             current_age=apparent_age_before,
@@ -4602,13 +4618,14 @@ if __name__ == "__main__":
     port = int(os.environ.get("DSP_PORT", "8081"))
     debug = (os.environ.get("DSP_DEBUG", "false") or "false").strip().lower() in {"1", "true", "yes", "on"}
     use_reloader = (os.environ.get("DSP_RELOADER", "false") or "false").strip().lower() in {"1", "true", "yes", "on"}
+    open_browser = (os.environ.get("DSP_OPEN_BROWSER", "false") or "false").strip().lower() in {"1", "true", "yes", "on"}
 
     # Automatically open the browser once the server is ready.
     # A short delay (1.2 s) ensures Flask has bound the socket before the
     # browser tries to connect.  The flag prevents double-open when the
     # reloader forks a child process (WERKZEUG_RUN_MAIN is set in the child).
     no_reloader_child = not use_reloader or os.environ.get("WERKZEUG_RUN_MAIN") == "true"
-    if not debug or no_reloader_child:
+    if open_browser and (not debug or no_reloader_child):
         url = f"http://{host}:{port}"
         threading.Timer(1.2, lambda: webbrowser.open(url)).start()
         print(f" * Opening browser at {url}")

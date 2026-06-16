@@ -1,6 +1,7 @@
 import base64
 import io
-import importlib
+import importlib.util
+import os
 import time
 import unittest
 
@@ -8,7 +9,12 @@ import cv2
 import numpy as np
 
 
-dsp_app = importlib.import_module("app")
+spec = importlib.util.spec_from_file_location(
+    "app",
+    os.path.join(os.path.dirname(__file__), "..", "app.py"),
+)
+dsp_app = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(dsp_app)
 
 
 def _synthetic_face(size=256):
