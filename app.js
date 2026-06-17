@@ -1496,8 +1496,6 @@ const accessoryCanvas = $('#accessoryCanvas');
 const selectedFilterEls = {
   glasses: $('#selectedGlassesName'),
   hat: $('#selectedHatName'),
-  earrings: $('#selectedEarringsName'),
-  necklace: $('#selectedNecklaceName'),
   lipstick: $('#selectedLipstickName'),
   blush: $('#selectedBlushName'),
 };
@@ -1549,16 +1547,6 @@ const FILTER_CATALOG = {
     { name: 'Beret', src: '/assets/hat_5.png', image: new Image() },
     { name: 'Fedora', src: '/assets/hat_6.png', image: new Image() },
   ],
-  earrings: [
-    { name: 'Model 1', src: '/assets/earring_1.png', image: new Image() },
-    { name: 'Model 2', src: '/assets/earring_2.png', image: new Image() },
-    { name: 'Model 3', src: '/assets/earring_3.png', image: new Image() },
-  ],
-  necklace: [
-    { name: 'Model 1', src: '/assets/necklace_1.png', image: new Image() },
-    { name: 'Model 2', src: '/assets/necklace_2.png', image: new Image() },
-    { name: 'Model 3', src: '/assets/necklace_3.png', image: new Image() },
-  ],
   lipstick: [
     { name: 'Red', color: 'rgba(190, 24, 62, 0.90)', stroke: 'rgba(255, 210, 220, 0.40)' },
     { name: 'Pink', color: 'rgba(236, 72, 153, 0.85)', stroke: 'rgba(255, 220, 240, 0.38)' },
@@ -1578,8 +1566,6 @@ const CATEGORY_TREE = {
     subcategories: [
       { key: 'glasses', label: 'Glasses', hint: 'Eye-locked models' },
       { key: 'hat', label: 'Hats', hint: 'Top-head placement' },
-      { key: 'earrings', label: 'Earrings', hint: 'Side-face tracking' },
-      { key: 'necklace', label: 'Necklace', hint: 'Lower chin / neck' },
     ],
   },
   makeup: {
@@ -1594,8 +1580,6 @@ const CATEGORY_TREE = {
 const SUBCATEGORY_LABELS = {
   glasses: 'Glasses',
   hat: 'Hats',
-  earrings: 'Earrings',
-  necklace: 'Necklace',
   lipstick: 'Lipstick',
   blush: 'Blush',
 };
@@ -1609,7 +1593,7 @@ const accessoryState = {
   fastAlpha: FAST_SMOOTHING_ALPHA,
   slowAlpha: SLOW_SMOOTHING_ALPHA,
   loadedImages: 0,
-  totalImages: 17,
+  totalImages: 11,
   requestId: 0,
   appliedRequestId: 0,
   lastLatencyMs: null,
@@ -1624,8 +1608,6 @@ const accessoryState = {
   selected: {
     glasses: null,
     hat: null,
-    earrings: null,
-    necklace: null,
     lipstick: null,
     blush: null,
   },
@@ -1634,7 +1616,7 @@ const accessoryState = {
   mirror: false,
 };
 
-['glasses', 'hat', 'earrings', 'necklace'].forEach(kind => {
+['glasses', 'hat'].forEach(kind => {
   FILTER_CATALOG[kind].forEach(item => {
     item.image.onload = () => { accessoryState.loadedImages += 1; };
     item.image.src = item.src;
@@ -1796,7 +1778,7 @@ function renderTryOnCatalog() {
     if (catalogTitle) catalogTitle.textContent = 'Categories';
     if (catalogBreadcrumb) catalogBreadcrumb.textContent = 'Main menu';
     catalogMenu.innerHTML = [
-      navCardHtml('category-accessories', 'Accessories', 'Glasses, hats, earrings, necklace'),
+      navCardHtml('category-accessories', 'Accessories', 'Glasses and hats'),
       navCardHtml('category-makeup', 'Makeup', 'Lipstick and blush colors'),
     ].join('');
     updateSelectedFilterLabels();
@@ -1906,9 +1888,6 @@ function smoothAccessoryMeasurements(previous, current) {
     eyeCenter: smoothPoint(previous.eyeCenter, current.eyeCenter, fast),
     noseBridge: smoothPoint(previous.noseBridge, current.noseBridge, fast),
     forehead: smoothPoint(previous.forehead, current.forehead, slow),
-    earringLeft: smoothPoint(previous.earringLeft, current.earringLeft, fast),
-    earringRight: smoothPoint(previous.earringRight, current.earringRight, fast),
-    necklaceAnchor: smoothPoint(previous.necklaceAnchor, current.necklaceAnchor, slow),
     blushLeft: smoothPoint(previous.blushLeft, current.blushLeft, fast),
     blushRight: smoothPoint(previous.blushRight, current.blushRight, fast),
     blushLeftAnchors: smoothPointList(previous.blushLeftAnchors, current.blushLeftAnchors, fast),
@@ -1946,12 +1925,11 @@ function getAccessoryMeasurements(data) {
   if (!points.length) return null;
 
   let leftEye, rightEye, noseBridge, forehead, faceWidth, faceHeight, yaw;
-  let earringLeft, earringRight, necklaceAnchor, blushLeft, blushRight, blushLeftAnchors, blushRightAnchors, lipOuter, lipInner;
+  let blushLeft, blushRight, blushLeftAnchors, blushRightAnchors, lipOuter, lipInner;
   let hasPreciseMakeup = false;
   if (points.length >= 468) {
     leftEye = avgPoints(points, [33, 133]);
     rightEye = avgPoints(points, [362, 263]);
-    const rawEyeCenterX = (Number(leftEye.x) + Number(rightEye.x)) / 2;
     noseBridge = avgPoints(points, [168, 6, 197]);
     forehead = avgPoints(points, [10, 151, 109, 338]);
     const leftCheek = points[234];
@@ -1963,9 +1941,6 @@ function getAccessoryMeasurements(data) {
     faceHeight = dist2d(forehead, chin);
     const faceCenter = { x: (Number(leftCheek.x) + Number(rightCheek.x)) / 2, y: (Number(leftCheek.y) + Number(rightCheek.y)) / 2 };
     yaw = (Number(noseTip.x) - faceCenter.x) / Math.max(faceWidth, 1);
-    earringLeft = { x: Number(leftCheek.x) - faceWidth * 0.07, y: Number(leftCheek.y) + faceHeight * 0.12 };
-    earringRight = { x: Number(rightCheek.x) + faceWidth * 0.07, y: Number(rightCheek.y) + faceHeight * 0.12 };
-    necklaceAnchor = { x: (Number(chin.x) * 0.20) + (rawEyeCenterX * 0.80), y: Number(chin.y) + faceHeight * 0.28 };
     blushLeftAnchors = pointList(points, BLUSH_LEFT_LANDMARKS);
     blushRightAnchors = pointList(points, BLUSH_RIGHT_LANDMARKS);
     blushLeft = avgPoints(points, BLUSH_LEFT_LANDMARKS);
@@ -1981,7 +1956,6 @@ function getAccessoryMeasurements(data) {
     // but it still gives stable eye, brow, and jaw locations for the demo.
     leftEye = avgPoints(points, [36, 37, 38, 39, 40, 41]);
     rightEye = avgPoints(points, [42, 43, 44, 45, 46, 47]);
-    const rawEyeCenterX = (Number(leftEye.x) + Number(rightEye.x)) / 2;
     noseBridge = avgPoints(points, [27, 28]);
     const leftBrow = avgPoints(points, [17, 18, 19, 20, 21]);
     const rightBrow = avgPoints(points, [22, 23, 24, 25, 26]);
@@ -1999,9 +1973,6 @@ function getAccessoryMeasurements(data) {
     faceHeight = dist2d(forehead, chin);
     const faceCenter = { x: (Number(leftJaw.x) + Number(rightJaw.x)) / 2, y: (Number(leftJaw.y) + Number(rightJaw.y)) / 2 };
     yaw = (Number(noseTip.x) - faceCenter.x) / Math.max(faceWidth, 1);
-    earringLeft = { x: Number(leftJaw.x) - faceWidth * 0.02, y: Number(leftJaw.y) };
-    earringRight = { x: Number(rightJaw.x) + faceWidth * 0.02, y: Number(rightJaw.y) };
-    necklaceAnchor = { x: (Number(chin.x) * 0.20) + (rawEyeCenterX * 0.80), y: Number(chin.y) + faceHeight * 0.30 };
     blushLeft = avgPoints(points, [2, 3, 31]) || leftJaw;
     blushRight = avgPoints(points, [13, 14, 35]) || rightJaw;
     blushLeftAnchors = [];
@@ -2026,9 +1997,6 @@ function getAccessoryMeasurements(data) {
     eyeCenter,
     noseBridge,
     forehead,
-    earringLeft,
-    earringRight,
-    necklaceAnchor,
     blushLeft,
     blushRight,
     blushLeftAnchors,
@@ -2262,43 +2230,6 @@ function drawAccessoriesOnContext(ctx, measurements) {
     const hatYawShift = (Number(measurements.yaw) || 0) * measurements.faceWidth * 0.26;
     const hatX = measurements.forehead.x + hatYawShift;
     drawYawWarpedImage(ctx, hat, hatX, hatY + (hatH / 2), hatW, hatH, measurements.roll, measurements.yaw);
-  }
-
-  const earringsIndex = accessoryState.selected.earrings;
-  if (earringsIndex !== null && accessoriesReady()) {
-    const earrings = FILTER_CATALOG.earrings[earringsIndex].image;
-    const earringH = measurements.faceHeight * 0.24;
-    const earringW = earringH * (earrings.naturalWidth / earrings.naturalHeight);
-    const yaw = measurements.yaw || 0;
-    
-    let leftOpacity = 1.0;
-    let rightOpacity = 1.0;
-    if (yaw > 0) {
-      rightOpacity = Math.max(0, 1 - (yaw * 3.8));
-    } else {
-      leftOpacity = Math.max(0, 1 - (Math.abs(yaw) * 3.8));
-    }
-
-    if (leftOpacity > 0.05) {
-      ctx.save();
-      ctx.globalAlpha = leftOpacity;
-      drawRotatedImage(ctx, earrings, measurements.earringLeft.x, measurements.earringLeft.y, earringW, earringH, measurements.roll * 0.45);
-      ctx.restore();
-    }
-    if (rightOpacity > 0.05) {
-      ctx.save();
-      ctx.globalAlpha = rightOpacity;
-      drawRotatedImage(ctx, earrings, measurements.earringRight.x, measurements.earringRight.y, earringW, earringH, measurements.roll * 0.45);
-      ctx.restore();
-    }
-  }
-
-  const necklaceIndex = accessoryState.selected.necklace;
-  if (necklaceIndex !== null && accessoriesReady()) {
-    const necklace = FILTER_CATALOG.necklace[necklaceIndex].image;
-    const necklaceW = measurements.faceWidth * 1.62;
-    const necklaceH = necklaceW * (necklace.naturalHeight / necklace.naturalWidth);
-    drawRotatedImage(ctx, necklace, measurements.necklaceAnchor.x, measurements.necklaceAnchor.y, necklaceW, necklaceH, measurements.roll * 0.18);
   }
 
   drawMakeupDebug(ctx, measurements);

@@ -9,7 +9,7 @@ The virtual try-on is integrated into the existing FaceWarp website webcam flow.
 - Live webcam input inside the FaceWarp website.
 - MediaPipe Face Mesh landmark tracking for live browser frames.
 - Right-side category menu with Accessories and Makeup.
-- Six premium glasses styles, five cartoon hat models, earrings, necklace, lipstick, and blush filters.
+- Six premium glasses styles, five cartoon hat models, lipstick, and blush filters.
 - Yaw-aware glasses placement for left/right head turns.
 - Perspective-like glasses warping for a more 3-D try-on feel.
 - Hat placement anchored to upper-face landmarks and shifted upward so it sits near the hairline.
@@ -35,12 +35,6 @@ assets/
   hat_3.png
   hat_5.png
   hat_6.png
-  earring_1.png
-  earring_2.png
-  earring_3.png
-  necklace_1.png
-  necklace_2.png
-  necklace_3.png
 requirements.txt
 README.md
 ```
@@ -62,7 +56,7 @@ http://127.0.0.1:8082
 Website try-on menu:
 
 - Main categories: Accessories, Makeup
-- Accessories: Glasses, Hats, Earrings, Necklace
+- Accessories: Glasses, Hats
 - Makeup: Lipstick, Blush
 - `A`: open Accessories
 - `M`: open Makeup
@@ -173,7 +167,7 @@ This behaves like a low-pass filter: it suppresses fast landmark jitter while ke
 Useful constants:
 
 - `FAST_SMOOTHING_ALPHA`: faster tracking for lips, eyes, glasses, cheeks, roll, and yaw.
-- `SLOW_SMOOTHING_ALPHA`: steadier tracking for hat/necklace anchors.
+- `SLOW_SMOOTHING_ALPHA`: steadier tracking for hat anchors.
 - `LANDMARK_POLL_MS`: interval for live Face Mesh landmark requests.
 - `GLASSES_WIDTH_FACTOR_WEB`: glasses size relative to eye distance.
 - `HAT_WIDTH_FACTOR_WEB`: hat size relative to face width.
