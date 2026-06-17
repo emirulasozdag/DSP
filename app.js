@@ -1517,8 +1517,8 @@ const GLASSES_WIDTH_FACTOR_WEB = 2.45;
 const HAT_WIDTH_FACTOR_WEB = 1.88;
 const HAT_Y_OFFSET_FACTOR_WEB = -0.33;
 const HAT_BOTTOM_ALIGNMENT_WEB = 0.55;
-const FAST_SMOOTHING_ALPHA = 0.92;
-const SLOW_SMOOTHING_ALPHA = 0.72;
+const FAST_SMOOTHING_ALPHA = 1.0;
+const SLOW_SMOOTHING_ALPHA = 1.0;
 const LANDMARK_POLL_MS = 50;
 const LANDMARK_STALE_MS = 600;
 const LIPSTICK_OUTER_LANDMARKS = [61, 185, 40, 39, 37, 0, 267, 269, 270, 409, 291, 375, 321, 405, 314, 17, 84, 181, 91, 146];
@@ -1629,6 +1629,7 @@ const accessoryState = {
     lipstick: null,
     blush: null,
   },
+  scratchCanvases: new Map(),
   debugMakeup: false,
   mirror: false,
 };
@@ -1643,8 +1644,7 @@ const accessoryState = {
 /* ── Client-side MediaPipe FaceLandmarker (zero-latency tracking) ────── */
 let _mpLandmarker = null;
 let _mpState = 'idle'; // idle | loading | ready | failed
-let _mpLastDetectAt = 0;
-const _MP_DETECT_INTERVAL_MS = 33; // ~30 FPS detection (render stays 60 FPS)
+let _mpLastDetectVideoTime = -1;
 
 async function _initClientLandmarker() {
   if (_mpState !== 'idle') return;
@@ -1652,10 +1652,10 @@ async function _initClientLandmarker() {
   console.log('[Webcam] Loading client-side FaceLandmarker…');
   try {
     const vision = await import(
-      'https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.22/vision_bundle.mjs'
+      '/assets/mediapipe/tasks-vision/0.10.35/vision_bundle.mjs'
     );
     const fileset = await vision.FilesetResolver.forVisionTasks(
-      'https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.22/wasm'
+      '/assets/mediapipe/tasks-vision/0.10.35/wasm'
     );
     const modelResp = await fetch('/models/face_landmarker.task');
     if (!modelResp.ok) throw new Error('Model file not found at /models/face_landmarker.task');
@@ -1680,11 +1680,11 @@ async function _initClientLandmarker() {
 function _detectLocal() {
   if (_mpState !== 'ready' || !_mpLandmarker) return false;
   if (!webcamVideo || !webcamVideo.videoWidth || !webcamVideo.videoHeight) return false;
+  const videoTime = webcamVideo.currentTime;
+  if (Number.isFinite(videoTime) && videoTime === _mpLastDetectVideoTime) return true;
+  _mpLastDetectVideoTime = Number.isFinite(videoTime) ? videoTime : -1;
 
   const now = performance.now();
-  if (now - _mpLastDetectAt < _MP_DETECT_INTERVAL_MS) return true; // throttled — keep last result
-  _mpLastDetectAt = now;
-
   try {
     const results = _mpLandmarker.detectForVideo(webcamVideo, now);
     if (!results.faceLandmarks || results.faceLandmarks.length === 0) return false;
@@ -2081,6 +2081,23 @@ function drawYawWarpedImage(ctx, image, centerX, centerY, width, height, angle, 
   ctx.restore();
 }
 
+function getAccessoryScratchCanvas(key, width, height) {
+  let canvas = accessoryState.scratchCanvases.get(key);
+  if (!canvas) {
+    canvas = document.createElement('canvas');
+    accessoryState.scratchCanvases.set(key, canvas);
+  }
+  if (canvas.width !== width) canvas.width = width;
+  if (canvas.height !== height) canvas.height = height;
+  const scratchCtx = canvas.getContext('2d');
+  scratchCtx.setTransform(1, 0, 0, 1, 0, 0);
+  scratchCtx.globalAlpha = 1;
+  scratchCtx.globalCompositeOperation = 'source-over';
+  scratchCtx.filter = 'none';
+  scratchCtx.clearRect(0, 0, width, height);
+  return { canvas, ctx: scratchCtx };
+}
+
 function drawFilledLandmarkShape(ctx, points, fill, stroke = null) {
   if (!Array.isArray(points) || points.length < 3) return;
   ctx.save();
@@ -2100,10 +2117,7 @@ function drawFilledLandmarkShape(ctx, points, fill, stroke = null) {
 
 function drawSoftPolygonMask(ctx, points, color, opacity, blurPx, stroke = null) {
   if (!Array.isArray(points) || points.length < 3) return;
-  const layer = document.createElement('canvas');
-  layer.width = ctx.canvas.width;
-  layer.height = ctx.canvas.height;
-  const layerCtx = layer.getContext('2d');
+  const { canvas: layer, ctx: layerCtx } = getAccessoryScratchCanvas('soft-polygon', ctx.canvas.width, ctx.canvas.height);
   layerCtx.save();
   layerCtx.filter = `blur(${blurPx}px)`;
   layerCtx.globalAlpha = opacity;
@@ -2114,10 +2128,7 @@ function drawSoftPolygonMask(ctx, points, color, opacity, blurPx, stroke = null)
 
 function drawLipstickMask(ctx, outerPoints, innerPoints, color, opacity, blurPx, stroke = null) {
   if (!Array.isArray(outerPoints) || outerPoints.length < 3) return;
-  const layer = document.createElement('canvas');
-  layer.width = ctx.canvas.width;
-  layer.height = ctx.canvas.height;
-  const layerCtx = layer.getContext('2d');
+  const { canvas: layer, ctx: layerCtx } = getAccessoryScratchCanvas('lipstick-layer', ctx.canvas.width, ctx.canvas.height);
 
   layerCtx.save();
   layerCtx.globalAlpha = opacity;
@@ -2130,10 +2141,7 @@ function drawLipstickMask(ctx, outerPoints, innerPoints, color, opacity, blurPx,
   }
   layerCtx.restore();
 
-  const blurred = document.createElement('canvas');
-  blurred.width = ctx.canvas.width;
-  blurred.height = ctx.canvas.height;
-  const blurredCtx = blurred.getContext('2d');
+  const { canvas: blurred, ctx: blurredCtx } = getAccessoryScratchCanvas('lipstick-blurred', ctx.canvas.width, ctx.canvas.height);
   blurredCtx.save();
   blurredCtx.filter = `blur(${blurPx}px)`;
   blurredCtx.drawImage(layer, 0, 0);
@@ -2159,10 +2167,7 @@ function drawBlush(ctx, center, faceWidth, color) {
   if (!center) return;
   const radiusX = faceWidth * 0.105 * BLUSH_SCALE;
   const radiusY = faceWidth * 0.065 * BLUSH_SCALE;
-  const layer = document.createElement('canvas');
-  layer.width = ctx.canvas.width;
-  layer.height = ctx.canvas.height;
-  const layerCtx = layer.getContext('2d');
+  const { canvas: layer, ctx: layerCtx } = getAccessoryScratchCanvas('blush', ctx.canvas.width, ctx.canvas.height);
   layerCtx.save();
   layerCtx.filter = `blur(${BLUSH_BLUR}px)`;
   layerCtx.globalAlpha = BLUSH_OPACITY;
@@ -2306,7 +2311,7 @@ function drawAccessoryOverlay() {
   if (accessoryCanvas.width !== width) accessoryCanvas.width = width;
   if (accessoryCanvas.height !== height) accessoryCanvas.height = height;
 
-  // Client-side detection: runs at ~30 FPS, throttled inside _detectLocal()
+  // Client-side detection runs once per decoded webcam frame.
   if (_mpState === 'ready') _detectLocal();
 
   const now = performance.now();
@@ -2319,7 +2324,8 @@ function drawAccessoryOverlay() {
 
   const ctx = accessoryCanvas.getContext('2d');
   ctx.clearRect(0, 0, width, height);
-  drawAccessoriesOnContext(ctx, accessoryState.smoothed);
+  const hasFreshMeasurements = accessoryState.lastLandmarkAt && (now - accessoryState.lastLandmarkAt <= LANDMARK_STALE_MS);
+  drawAccessoriesOnContext(ctx, hasFreshMeasurements ? accessoryState.smoothed : null);
   updateTrackingDebug();
   accessoryState.raf = requestAnimationFrame(drawAccessoryOverlay);
 }
@@ -2405,7 +2411,7 @@ function stopAccessoryFilter() {
   accessoryState.smoothed = null;
   accessoryState.lastLatencyMs = null;
   accessoryState.lastLandmarkAt = 0;
-  _mpLastDetectAt = 0;
+  _mpLastDetectVideoTime = -1;
   updateTrackingDebug(true);
   if (accessoryCanvas) {
     const ctx = accessoryCanvas.getContext('2d');

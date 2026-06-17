@@ -7,4 +7,6 @@ __pycache__/
 venv/
 *.pt
 sam_repo/
-models/*.dat
+models/*.dat
+/.venv-face-filter
+/node_modules

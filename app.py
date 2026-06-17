@@ -3738,7 +3738,12 @@ def script_page():
 
 @app.get("/assets/<path:filename>")
 def assets_file(filename):
-    return send_from_directory(ROOT / "assets", filename)
+    resp = send_from_directory(ROOT / "assets", filename)
+    if filename.endswith(".mjs"):
+        resp.mimetype = "text/javascript"
+    elif filename.endswith(".wasm"):
+        resp.mimetype = "application/wasm"
+    return resp
 
 
 @app.get("/results/<path:filename>")
